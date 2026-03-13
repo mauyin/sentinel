@@ -1,0 +1,37 @@
+{
+  "name": "sentinel",
+  "version": "0.1.0",
+  "description": "Autonomous DeFi trading agent with private AI reasoning and institutional-grade risk management",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "register": "tsx scripts/register.ts",
+    "fund": "tsx scripts/fund-wallet.ts",
+    "demo": "tsx scripts/demo.ts"
+  },
+  "dependencies": {
+    "decimal.js": "^10.4.3",
+    "openai": "^4.73.0",
+    "pino": "^9.5.0",
+    "viem": "^2.21.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.15.0",
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
