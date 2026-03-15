@@ -276,10 +276,11 @@ $ pnpm dev -- --mode autonomous
 | Risk bridge (TS <-> Rust IPC) | **Done** | — |
 | Audit logger | **Done** | Open Track (documentation) |
 | Config + infra | **Done** | — |
-| Uniswap execution | **WIP** | Uniswap track |
-| GMX execution | **WIP** | bond.credit track |
-| Agent loop (autonomous/interactive) | **WIP** | All tracks |
-| ERC-8004 registration | **WIP** | Open Track |
+| Uniswap execution | **Done** | Uniswap track |
+| GMX execution | **Done** | bond.credit track |
+| Agent loop (autonomous/interactive) | **Done** | All tracks |
+| Position sizing | **Done** | Confidence-scaled, equity/volume capped |
+| ERC-8004 registration | **Partial** | Open Track |
 | Self Protocol identity | **WIP** | Self track |
 
-The core brain (observe → reason → verify) is done. What's left is the hands (execute) and the face (identity).
+The core pipeline (observe → reason → size → verify → execute) is fully functional. Identity registration is via the Synthesis API.

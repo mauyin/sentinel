@@ -139,6 +139,21 @@ export class RiskBridge {
     return this.send({ command: "configure", payload: limits });
   }
 
+  async addMarket(market: {
+    symbol: string;
+    initial_margin_bps: number;
+    maintenance_margin_bps: number;
+    max_leverage: number;
+    tick_size: number;
+    min_size: number;
+  }): Promise<RiskResponse> {
+    return this.send({ command: "add_market", payload: market });
+  }
+
+  async initAccount(equity: number): Promise<RiskResponse> {
+    return this.send({ command: "init_account", payload: { equity } });
+  }
+
   stop(): void {
     if (this.process) {
       this.process.stdin?.end();

@@ -11,7 +11,7 @@ export type Side = "long" | "short";
 export const TradeDecisionSchema = z.object({
   action: z.enum(["buy", "sell", "hold"]),
   market: z.string(),
-  size: z.number().positive().optional(),
+  size: z.number().positive().nullable().optional().transform(v => v ?? undefined),
   confidence: z.number().min(0).max(100),
   reasoning: z.string(),
   timeHorizon: z.enum(["scalp", "swing", "position"]).optional(),

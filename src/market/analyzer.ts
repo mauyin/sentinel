@@ -1,5 +1,14 @@
 import type { MarketSnapshot, PortfolioSnapshot, TradeResult } from "../core/types.js";
 
+export interface RiskContextData {
+  equityUsd: number;
+  maxTradeSizeUsd: number;
+  maxDailyVolumeUsd: number;
+  dailyVolumeUsedUsd: number;
+  maxDrawdownPct: number;
+  openPositions: { market: string; side: string; size: number; entryPrice: number; unrealizedPnl: number }[];
+}
+
 /**
  * Format market data into a string suitable for LLM analysis.
  */
@@ -53,6 +62,32 @@ export function formatRecentTrades(trades: TradeResult[]): string {
     const time = new Date(t.timestamp).toISOString();
     return `[${status}] ${time} ${t.side.toUpperCase()} ${t.size.toString()} ${t.market} @ $${t.price.toFixed(2)}${t.txHash ? ` tx:${t.txHash.slice(0, 10)}...` : ""}`;
   });
+
+  return lines.join("\n");
+}
+
+/**
+ * Format risk engine state into a human-readable block for LLM context.
+ */
+export function formatRiskContext(data: RiskContextData): string {
+  const lines = [
+    `Account Equity: $${data.equityUsd.toFixed(2)}`,
+    `Max Trade Size: $${data.maxTradeSizeUsd.toFixed(2)}`,
+    `Daily Volume Used: $${data.dailyVolumeUsedUsd.toFixed(2)} / $${data.maxDailyVolumeUsd.toFixed(2)}`,
+    `Max Drawdown: ${data.maxDrawdownPct}%`,
+  ];
+
+  if (data.openPositions.length === 0) {
+    lines.push("Open Positions: none");
+  } else {
+    lines.push("Open Positions:");
+    for (const p of data.openPositions) {
+      const pnlSign = p.unrealizedPnl >= 0 ? "+" : "";
+      lines.push(
+        `  ${p.market} ${p.side} ${p.size} @ $${p.entryPrice.toFixed(2)} (PnL: ${pnlSign}$${p.unrealizedPnl.toFixed(2)})`,
+      );
+    }
+  }
 
   return lines.join("\n");
 }

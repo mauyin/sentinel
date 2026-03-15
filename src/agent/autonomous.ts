@@ -6,8 +6,6 @@ import type { ExecutionRouter, ExecuteParams } from "../execution/router.js";
 import type { LlmConfig } from "../llm/provider.js";
 import type {
   MarketSnapshot,
-  PortfolioSnapshot,
-  TradeDecision,
   TradeResult,
 } from "../core/types.js";
 import { Decimal } from "../core/types.js";
@@ -25,7 +23,10 @@ import {
   formatMarketData,
   formatPortfolio,
   formatRecentTrades,
+  formatRiskContext,
+  type RiskContextData,
 } from "../market/analyzer.js";
+import { computeTradeSize, resolveProposedSizeUsd } from "../risk/sizer.js";
 import { getPublicClient } from "../infra/rpc.js";
 import { getAccount } from "../infra/rpc.js";
 import { childLogger } from "../infra/logger.js";
@@ -115,7 +116,9 @@ async function runCycle(
   // Fetch portfolio from the first market's chain
   const primaryMarket = markets[0]!;
   const client = getPublicClient(primaryMarket.chainId);
-  const allTokens = markets.flatMap((m) => [m.baseToken, m.quoteToken]);
+  const allTokens = markets
+    .filter((m) => m.chainId === primaryMarket.chainId)
+    .flatMap((m) => [m.baseToken, m.quoteToken]);
   const uniqueTokens = dedupeTokens(allTokens);
   const portfolio = await fetchPortfolio(
     client,
@@ -128,13 +131,33 @@ async function runCycle(
   // ── Step 2: ANALYZE ──────────────────────────────────────────────────
   log.info("step 2/7: formatting data for LLM");
 
+  const riskState = await risk.getState();
+  const riskCtx: RiskContextData = {
+    equityUsd: Number(riskState.equity ?? 0),
+    maxTradeSizeUsd: env.MAX_TRADE_SIZE_USD,
+    maxDailyVolumeUsd: env.MAX_DAILY_VOLUME_USD,
+    dailyVolumeUsedUsd: Number(riskState.daily_volume ?? 0),
+    maxDrawdownPct: env.MAX_DRAWDOWN_PCT,
+    openPositions: Array.isArray(riskState.positions)
+      ? (riskState.positions as { market: string; side: string; size: number; entry_price: number; unrealized_pnl: number }[]).map((p) => ({
+          market: p.market,
+          side: p.side,
+          size: p.size,
+          entryPrice: p.entry_price,
+          unrealizedPnl: p.unrealized_pnl,
+        }))
+      : [],
+  };
+
   const marketData = formatMarketData(snapshots);
   const portfolioData = formatPortfolio(portfolio);
   const tradesData = formatRecentTrades(recentTrades);
+  const riskContextStr = formatRiskContext(riskCtx);
   const userPrompt = buildMarketAnalysisPrompt(
     marketData,
     portfolioData,
     tradesData,
+    riskContextStr,
   );
 
   // ── Step 3: REASON ───────────────────────────────────────────────────
@@ -176,7 +199,6 @@ async function runCycle(
   // ── Step 5: RISK REVIEW (2nd LLM pass) ──────────────────────────────
   log.info("step 5/7: LLM risk review");
 
-  const riskState = await risk.getState();
   const riskReviewPrompt = buildRiskReviewPrompt(
     JSON.stringify(decision),
     portfolioData,
@@ -200,14 +222,7 @@ async function runCycle(
     return;
   }
 
-  // Apply adjusted size if provided
-  const tradeSize = riskReview?.adjustedSize
-    ? new Decimal(riskReview.adjustedSize)
-    : new Decimal(decision.size ?? env.MAX_TRADE_SIZE_USD);
-
-  // ── Step 6: VALIDATE (Rust risk engine) ──────────────────────────────
-  log.info("step 6/7: Rust risk engine validation");
-
+  // ── Step 5b: POSITION SIZING ────────────────────────────────────────
   const marketPair = findMarketPair(markets, decision.market);
   const snapshot = findSnapshot(snapshots, decision.market);
 
@@ -218,6 +233,33 @@ async function runCycle(
     );
     return;
   }
+
+  // Resolve LLM's proposed size (handle base-unit vs USD ambiguity)
+  const llmRawSize = riskReview?.adjustedSize ?? decision.size;
+  const proposedSizeUsd = resolveProposedSizeUsd(llmRawSize, snapshot.price);
+
+  const sizerResult = computeTradeSize({
+    proposedSizeUsd,
+    confidence: decision.confidence,
+    maxTradeSizeUsd: new Decimal(env.MAX_TRADE_SIZE_USD),
+    equityUsd: new Decimal(riskCtx.equityUsd),
+    dailyVolumeUsedUsd: new Decimal(riskCtx.dailyVolumeUsedUsd),
+    maxDailyVolumeUsd: new Decimal(env.MAX_DAILY_VOLUME_USD),
+  });
+
+  const tradeSize = sizerResult.sizeUsd;
+  log.info(
+    { proposed: proposedSizeUsd?.toFixed(2) ?? "null", adjusted: tradeSize.toFixed(2), reasoning: sizerResult.reasoning },
+    "position size computed",
+  );
+
+  if (tradeSize.lessThanOrEqualTo(0)) {
+    log.info("sizer returned zero — skipping trade");
+    return;
+  }
+
+  // ── Step 6: VALIDATE (Rust risk engine) ──────────────────────────────
+  log.info("step 6/7: Rust risk engine validation");
 
   // Update price in risk engine
   await risk.updatePrice(marketPair.id, snapshot.price.toNumber());
@@ -323,7 +365,7 @@ function parseRiskReview(raw: string): RiskReview | null {
   }
 }
 
-function findSnapshot(
+export function findSnapshot(
   snapshots: MarketSnapshot[],
   market: string,
 ): MarketSnapshot | undefined {
@@ -335,7 +377,7 @@ function findSnapshot(
   );
 }
 
-function findMarketPair(
+export function findMarketPair(
   markets: MarketPairConfig[],
   market: string,
 ): MarketPairConfig | undefined {
@@ -349,7 +391,7 @@ function findMarketPair(
   );
 }
 
-function uniqueCoingeckoIds(markets: MarketPairConfig[]): string[] {
+export function uniqueCoingeckoIds(markets: MarketPairConfig[]): string[] {
   const ids = new Set<string>();
   for (const m of markets) {
     ids.add(m.baseToken.coingeckoId);
@@ -358,7 +400,7 @@ function uniqueCoingeckoIds(markets: MarketPairConfig[]): string[] {
   return [...ids];
 }
 
-function dedupeTokens(
+export function dedupeTokens(
   tokens: { symbol: string; address: `0x${string}`; decimals: number; coingeckoId: string }[],
 ) {
   const seen = new Set<string>();

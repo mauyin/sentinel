@@ -6,15 +6,18 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --env-file=.env src/index.ts",
     "start": "node dist/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "register": "tsx scripts/register.ts",
-    "fund": "tsx scripts/fund-wallet.ts",
-    "demo": "tsx scripts/demo.ts"
+    "wallet:generate": "tsx scripts/generate-wallet.ts",
+    "register": "tsx --env-file=.env scripts/register.ts",
+    "fund": "tsx --env-file=.env scripts/fund-wallet.ts",
+    "demo": "tsx --env-file=.env scripts/demo.ts",
+    "smoke": "tsx --env-file=.env src/index.ts --mode smoke",
+    "build:risk": "cargo build --release"
   },
   "dependencies": {
     "decimal.js": "^10.4.3",

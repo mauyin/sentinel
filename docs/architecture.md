@@ -85,11 +85,12 @@ sentinel/
 │   │   └── portfolio.ts       # On-chain balance fetching (native + ERC-20)
 │   │
 │   ├── risk/
-│   │   └── bridge.ts          # TS <-> Rust IPC bridge (spawn, send, receive)
+│   │   ├── bridge.ts          # TS <-> Rust IPC bridge (spawn, send, receive)
+│   │   └── sizer.ts           # Programmatic position sizing (confidence, equity, volume caps)
 │   │
-│   ├── execution/             # [WIP] Uniswap + GMX trade execution
-│   ├── identity/              # [WIP] ERC-8004 + Self Protocol ZK identity
-│   ├── agent/                 # [WIP] Autonomous + interactive + multi-agent modes
+│   ├── execution/             # Uniswap (spot) + GMX (perps) trade execution
+│   ├── identity/              # ERC-8004 registration + wallet utils
+│   ├── agent/                 # Autonomous loop, interactive REPL, smoke test
 │   │
 │   ├── audit/
 │   │   └── logger.ts          # JSONL decision trail (daily files)
@@ -256,8 +257,9 @@ Both layers avoid floating-point:
 | Risk bridge (TS) | Done | JSON IPC with Rust binary |
 | Audit logger | Done | JSONL daily files |
 | Infrastructure | Done | Logger, RPC, HTTP with retries |
-| Execution (Uniswap) | WIP | Constants defined, logic not yet |
-| Execution (GMX) | WIP | Not started |
-| Identity (ERC-8004) | WIP | Not started |
-| Agent modes | WIP | Stubs only |
+| Execution (Uniswap) | **Done** | Uniswap Trading API — quote, permit2, swap |
+| Execution (GMX) | **Done** | GMX V2 ExchangeRouter multicall |
+| Identity (ERC-8004) | **Partial** | Read-only registration check; write via Synthesis API |
+| Agent modes | **Done** | Autonomous loop, interactive REPL, smoke test |
+| Position sizing | **Done** | Programmatic sizer with confidence scaling, equity/volume caps |
 | Multi-agent | WIP | Not started |

@@ -4,6 +4,8 @@ import type { Env } from "../config/env.js";
 import type { SupportedChainId } from "../config/chains.js";
 import { txUrl } from "../config/chains.js";
 import { childLogger } from "../infra/logger.js";
+import { UniswapExecutor } from "./uniswap.js";
+import { GmxExecutor } from "./gmx.js";
 
 export interface ExecuteParams {
   market: MarketPairConfig;
@@ -97,15 +99,14 @@ export class ExecutionRouter {
 // Factory — wires executors per chain (mock for all chains initially)
 // ---------------------------------------------------------------------------
 
-export function createRouter(_env: Env): ExecutionRouter {
+export function createRouter(env: Env): ExecutionRouter {
   const router = new ExecutionRouter();
   const mock = new MockExecutor();
 
-  // All chains use mock execution until real executors are wired in
-  router.register(8453, mock); // Base mainnet
-  router.register(84532, mock); // Base Sepolia
-  router.register(42161, mock); // Arbitrum One
-  router.register(421614, mock); // Arbitrum Sepolia
+  router.register(8453, new UniswapExecutor(env, 8453)); // Base mainnet — real Uniswap
+  router.register(84532, mock);                          // Base Sepolia — mock
+  router.register(42161, new GmxExecutor(env, 42161));   // Arbitrum One — real GMX
+  router.register(421614, mock);                         // Arbitrum Sepolia — mock
 
   return router;
 }

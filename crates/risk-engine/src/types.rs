@@ -7,8 +7,43 @@ pub const SCALE: i128 = 10i128.pow(DECIMALS);
 
 /// Fixed-point wrapper for financial calculations.
 /// All values are i128 scaled by 10^8.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Decimal(pub i128);
+
+impl<'de> Deserialize<'de> for Decimal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct DecimalVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for DecimalVisitor {
+            type Value = Decimal;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a number (float or integer)")
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Decimal, E> {
+                Ok(Decimal::from_f64(v))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Decimal, E> {
+                Ok(Decimal(v as i128 * SCALE))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Decimal, E> {
+                Ok(Decimal(v as i128 * SCALE))
+            }
+
+            fn visit_i128<E: serde::de::Error>(self, v: i128) -> Result<Decimal, E> {
+                Ok(Decimal(v))
+            }
+        }
+
+        deserializer.deserialize_any(DecimalVisitor)
+    }
+}
 
 impl Decimal {
     pub const ZERO: Self = Self(0);
@@ -193,6 +228,11 @@ pub struct PriceUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountInit {
+    pub equity: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", content = "payload", rename_all = "snake_case")]
 pub enum Command {
     ValidateTrade(TradeRequest),
@@ -200,6 +240,8 @@ pub enum Command {
     UpdatePrice(PriceUpdate),
     GetState,
     Configure(RiskLimits),
+    AddMarket(MarketConfig),
+    InitAccount(AccountInit),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +268,12 @@ pub enum Response {
         daily_volume: Decimal,
     },
     Configured,
+    MarketAdded {
+        symbol: String,
+    },
+    AccountInitialized {
+        equity: Decimal,
+    },
     Error {
         message: String,
     },

@@ -14,6 +14,13 @@ You MUST respond with ONLY a JSON object (no markdown, no explanation outside JS
   "riskLevel": "low" | "medium" | "high"
 }
 
+Sizing constraints:
+- You will receive account equity, max trade size, and current positions in the Risk Context section
+- Size your trades in USD (not base asset units)
+- Never exceed the max trade size shown in Risk Context
+- Scale size with confidence: lower confidence = smaller position
+- If unsure about sizing, set size to null — the system will calculate it
+
 Decision criteria:
 - Only recommend buy/sell when confidence >= 60
 - Size should be proportional to confidence (higher confidence = larger allocation)
@@ -45,17 +52,21 @@ export function buildMarketAnalysisPrompt(
   marketData: string,
   portfolioData: string,
   recentTrades: string,
+  riskContext?: string,
 ): string {
-  return `## Current Market Data
-${marketData}
+  const sections = [
+    `## Current Market Data\n${marketData}`,
+    `## Portfolio State\n${portfolioData}`,
+    `## Recent Trade History\n${recentTrades}`,
+  ];
 
-## Portfolio State
-${portfolioData}
+  if (riskContext) {
+    sections.push(`## Risk Context\n${riskContext}`);
+  }
 
-## Recent Trade History
-${recentTrades}
+  sections.push("Analyze the market conditions and produce your trading decision.");
 
-Analyze the market conditions and produce your trading decision.`;
+  return sections.join("\n\n");
 }
 
 export function buildRiskReviewPrompt(

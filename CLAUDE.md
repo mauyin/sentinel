@@ -63,3 +63,9 @@ Rust responds with JSON on stdout:
 {"status": "approved", "payload": {...}}
 {"status": "rejected", "reason": "max_drawdown_exceeded"}
 ```
+
+## Vault
+
+- path: ~/Desktop/vault
+- context-card: 02-Projects/sentinel/ContextCard.md
+- session-folder: 05-Sessions/sentinel/

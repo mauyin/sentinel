@@ -40,6 +40,8 @@ impl RiskEngine {
             Command::UpdatePrice(update) => self.update_price(update),
             Command::GetState => self.get_state(),
             Command::Configure(limits) => self.configure(limits),
+            Command::AddMarket(config) => self.add_market(config),
+            Command::InitAccount(init) => self.init_account(init),
         }
     }
 
@@ -182,7 +184,19 @@ impl RiskEngine {
         Response::Configured
     }
 
-    fn find_config(&self, market: &str) -> Option<&MarketConfig> {
+    fn add_market(&mut self, config: MarketConfig) -> Response {
+        let symbol = config.symbol.clone();
+        self.market_configs.retain(|(m, _)| m != &symbol);
+        self.market_configs.push((symbol.clone(), config));
+        Response::MarketAdded { symbol }
+    }
+
+    fn init_account(&mut self, init: AccountInit) -> Response {
+        self.account = Account::new(init.equity);
+        Response::AccountInitialized { equity: init.equity }
+    }
+
+    pub(crate) fn find_config(&self, market: &str) -> Option<&MarketConfig> {
         self.market_configs.iter().find(|(m, _)| m == market).map(|(_, c)| c)
     }
 }
@@ -348,6 +362,117 @@ mod tests {
         let response = engine.handle(Command::Configure(new_limits));
         assert!(matches!(response, Response::Configured));
         assert_eq!(engine.limit_tracker.limits.max_trade_size_usd.to_f64(), 50.0);
+    }
+
+    #[test]
+    fn test_add_market_command() {
+        let mut engine = RiskEngine::new();
+        let config = MarketConfig {
+            symbol: "BTC-USD".to_string(),
+            initial_margin_bps: 500,
+            maintenance_margin_bps: 250,
+            max_leverage: Decimal::from_f64(20.0),
+            tick_size: Decimal::from_f64(0.01),
+            min_size: Decimal::from_f64(0.0001),
+        };
+        let response = engine.handle(Command::AddMarket(config));
+        match response {
+            Response::MarketAdded { symbol } => assert_eq!(symbol, "BTC-USD"),
+            other => panic!("Expected MarketAdded, got {:?}", other),
+        }
+        assert!(engine.find_config("BTC-USD").is_some());
+    }
+
+    #[test]
+    fn test_add_market_idempotent() {
+        let mut engine = RiskEngine::new();
+        let config1 = MarketConfig {
+            symbol: "ETH-USD".to_string(),
+            initial_margin_bps: 1000,
+            maintenance_margin_bps: 500,
+            max_leverage: Decimal::from_f64(10.0),
+            tick_size: Decimal::from_f64(0.01),
+            min_size: Decimal::from_f64(0.001),
+        };
+        engine.handle(Command::AddMarket(config1));
+
+        // Re-register with different margin
+        let config2 = MarketConfig {
+            symbol: "ETH-USD".to_string(),
+            initial_margin_bps: 2000,
+            maintenance_margin_bps: 1000,
+            max_leverage: Decimal::from_f64(5.0),
+            tick_size: Decimal::from_f64(0.01),
+            min_size: Decimal::from_f64(0.001),
+        };
+        engine.handle(Command::AddMarket(config2));
+
+        // Should only have one config, with updated values
+        let configs: Vec<_> = engine.market_configs.iter().filter(|(m, _)| m == "ETH-USD").collect();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].1.initial_margin_bps, 2000);
+    }
+
+    #[test]
+    fn test_init_account_command() {
+        let mut engine = RiskEngine::new();
+        assert!(engine.account.equity.is_zero());
+
+        let response = engine.handle(Command::InitAccount(AccountInit {
+            equity: Decimal::from_f64(5000.0),
+        }));
+        match response {
+            Response::AccountInitialized { equity } => {
+                assert_eq!(equity.to_f64(), 5000.0);
+            }
+            other => panic!("Expected AccountInitialized, got {:?}", other),
+        }
+        assert_eq!(engine.account.equity.to_f64(), 5000.0);
+        assert_eq!(engine.account.peak_equity.to_f64(), 5000.0);
+    }
+
+    #[test]
+    fn test_full_init_then_trade() {
+        let mut engine = RiskEngine::new();
+
+        // 1. Init account
+        engine.handle(Command::InitAccount(AccountInit {
+            equity: Decimal::from_f64(10000.0),
+        }));
+
+        // 2. Add market
+        engine.handle(Command::AddMarket(MarketConfig {
+            symbol: "ETH-USDC-BASE".to_string(),
+            initial_margin_bps: 1000,
+            maintenance_margin_bps: 500,
+            max_leverage: Decimal::from_f64(10.0),
+            tick_size: Decimal::from_f64(0.01),
+            min_size: Decimal::from_f64(1.0),
+        }));
+
+        // 3. Configure limits
+        engine.handle(Command::Configure(RiskLimits {
+            max_trade_size_usd: Decimal::from_f64(10000.0),
+            max_daily_volume_usd: Decimal::from_f64(50000.0),
+            max_drawdown_bps: 1000,
+            cooldown_seconds: 0,
+        }));
+
+        // 4. Validate trade — should be approved
+        let response = engine.handle(Command::ValidateTrade(TradeRequest {
+            market: "ETH-USDC-BASE".to_string(),
+            side: Side::Long,
+            size: Decimal::from_f64(1.0),
+            price: Decimal::from_f64(3000.0),
+            leverage: Decimal::from_f64(1.0),
+        }));
+        match response {
+            Response::Approved { margin_required, .. } => {
+                // 1.0 * 3000 * 0.10 = 300
+                assert_eq!(margin_required.to_f64(), 300.0);
+            }
+            other => panic!("Expected Approved, got {:?}", other),
+        }
     }
 
     #[test]
