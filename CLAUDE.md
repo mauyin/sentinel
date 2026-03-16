@@ -57,8 +57,8 @@ sentinel/
 - `pnpm dev` — Run in dev mode (tsx)
 - `pnpm test` — Run TypeScript tests (103 tests)
 - `cargo test` — Run Rust tests (70 tests)
-- `pnpm dev -- --mode autonomous` — Autonomous trading
-- `pnpm dev -- --mode interactive` — Interactive CLI
+- `pnpm dev --mode autonomous` — Autonomous trading
+- `pnpm dev --mode interactive` — Interactive CLI
 - `docker compose up` — Deploy with dashboard at localhost:3000
 
 ## Risk Engine Protocol

@@ -19,7 +19,12 @@ import { startDashboard } from "./dashboard/server.js";
 type Mode = "autonomous" | "interactive" | "smoke";
 
 async function main(): Promise<void> {
+  // Strip leading '--' that pnpm injects (e.g. `pnpm dev -- --mode interactive`)
+  const rawArgs = process.argv.slice(2);
+  const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
+
   const { values } = parseArgs({
+    args,
     options: {
       mode: { type: "string", short: "m", default: "interactive" },
     },

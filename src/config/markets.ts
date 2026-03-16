@@ -296,11 +296,6 @@ function parseSimpleYaml(yaml: string): unknown {
         }
         currentNestedKey = key;
         currentNested = {};
-      } else if (indent >= 4 && currentNested) {
-        // Could be a nested value or a new top-level field
-        if (currentNestedKey && val !== "") {
-          currentNested[key] = parseValue(val);
-        }
       } else if (indent >= 4 && val !== "") {
         // Close nested if open
         if (currentNested && currentNestedKey) {
