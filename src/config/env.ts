@@ -28,9 +28,18 @@ const envSchema = z.object({
   COOLDOWN_SECONDS: z.coerce.number().nonnegative().default(60),
   INITIAL_EQUITY_USD: z.coerce.number().nonnegative().default(0),
 
+  // Circuit breaker
+  MAX_CONSECUTIVE_LOSSES: z.coerce.number().int().positive().default(5),
+  MAX_EQUITY_DROP_RATE_BPS: z.coerce.number().int().positive().default(1000),
+  MAX_DATA_STALENESS_SECS: z.coerce.number().int().positive().default(300),
+
   // ERC-8004 / Synthesis
   ERC8004_CONTRACT_ADDRESS: z.string().startsWith("0x").optional(),
   SYNTHESIS_API_KEY: z.string().optional(),
+
+  // Dashboard
+  DASHBOARD_PORT: z.coerce.number().int().positive().default(3000),
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
 
   // Mode
   MODE: z.enum(["autonomous", "interactive", "smoke"]).default("interactive"),

@@ -1,0 +1,60 @@
+markets:
+  - id: ETH-USDC-BASE
+    base:
+      symbol: WETH
+      address: "0x4200000000000000000000000000000000000006"
+      decimals: 18
+      coingeckoId: ethereum
+    quote:
+      symbol: USDC
+      address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      decimals: 6
+      coingeckoId: usd-coin
+    chainId: 8453
+    venue: uniswap
+    margin:
+      initialBps: 1000
+      maintenanceBps: 500
+      maxLeverage: 10
+    minTradeUsd: 1
+
+  - id: ETH-USDC-BASE-SEPOLIA
+    base:
+      symbol: WETH
+      address: "0x4200000000000000000000000000000000000006"
+      decimals: 18
+      coingeckoId: ethereum
+    quote:
+      symbol: USDC
+      address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+      decimals: 6
+      coingeckoId: usd-coin
+    chainId: 84532
+    venue: uniswap
+    margin:
+      initialBps: 1000
+      maintenanceBps: 500
+      maxLeverage: 10
+    minTradeUsd: 1
+
+  - id: ETH-USDC-ARBITRUM
+    base:
+      symbol: WETH
+      address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+      decimals: 18
+      coingeckoId: ethereum
+    quote:
+      symbol: USDC
+      address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+      decimals: 6
+      coingeckoId: usd-coin
+    chainId: 42161
+    venue: gmx
+    gmx:
+      marketAddress: "0x70d95587d40A2caf56bd97485aB3Eec10Bee6336"
+      indexToken: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+    margin:
+      initialBps: 1000
+      maintenanceBps: 500
+      maxLeverage: 10
+    minTradeUsd: 1

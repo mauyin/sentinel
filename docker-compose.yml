@@ -1,0 +1,10 @@
+services:
+  sentinel:
+    build: .
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    env_file: .env
+    volumes:
+      - ./audit-logs:/app/audit-logs
+      - ./markets.yaml:/app/markets.yaml:ro
+    restart: unless-stopped

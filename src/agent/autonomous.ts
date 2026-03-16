@@ -36,6 +36,7 @@ import {
   DEFAULT_SLIPPAGE_BPS,
   DEFAULT_DEADLINE_SECONDS,
 } from "../core/constants.js";
+import type { EventBus } from "../infra/events.js";
 
 export interface AgentDeps {
   env: Env;
@@ -44,6 +45,7 @@ export interface AgentDeps {
   audit: AuditLogger;
   executor: ExecutionRouter;
   markets: MarketPairConfig[];
+  eventBus?: EventBus;
 }
 
 const MAX_RECENT_TRADES = 20;
@@ -61,6 +63,18 @@ export async function runAutonomous(deps: AgentDeps): Promise<void> {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
+  // WS2.7: SIGUSR1 trips circuit breaker manually
+  const manualTrip = async () => {
+    log.warn("SIGUSR1 received — tripping circuit breaker");
+    try {
+      await deps.risk.tripCircuit();
+      deps.eventBus?.emit("circuit", { state: "open", reason: "manual_sigusr1" });
+    } catch (err) {
+      log.error({ err }, "failed to trip circuit breaker via SIGUSR1");
+    }
+  };
+  process.on("SIGUSR1", manualTrip);
+
   log.info(
     { marketCount: deps.markets.length, pollMs: POLL_INTERVAL_MS },
     "autonomous agent starting",
@@ -71,6 +85,24 @@ export async function runAutonomous(deps: AgentDeps): Promise<void> {
     const cycleLog = childLogger({ component: "autonomous", cycle });
 
     try {
+      // WS2.7: Check circuit breaker before each cycle
+      const circuitState = await deps.risk.checkCircuit();
+      if (circuitState.status === "circuit_state" && circuitState.state === "open") {
+        cycleLog.warn(
+          { reason: circuitState.last_trip_reason },
+          "circuit breaker OPEN — skipping cycle",
+        );
+        deps.eventBus?.emit("circuit", {
+          state: "open",
+          reason: circuitState.last_trip_reason,
+          consecutive_losses: circuitState.consecutive_losses,
+        });
+        if (!stopped) {
+          await sleep(POLL_INTERVAL_MS);
+        }
+        continue;
+      }
+
       await runCycle(deps, recentTrades, cycleLog);
     } catch (err) {
       cycleLog.error({ err }, "cycle failed");
@@ -84,6 +116,7 @@ export async function runAutonomous(deps: AgentDeps): Promise<void> {
 
   process.removeListener("SIGINT", shutdown);
   process.removeListener("SIGTERM", shutdown);
+  process.removeListener("SIGUSR1", manualTrip);
   log.info({ totalCycles: cycle }, "autonomous agent stopped");
 }
 
@@ -96,7 +129,7 @@ async function runCycle(
   recentTrades: TradeResult[],
   log: ReturnType<typeof childLogger>,
 ): Promise<void> {
-  const { env, llm, risk, audit, executor, markets } = deps;
+  const { env, llm, risk, audit, executor, markets, eventBus } = deps;
   const account = getAccount(env.AGENT_PRIVATE_KEY as `0x${string}`);
 
   // ── Step 1: OBSERVE ──────────────────────────────────────────────────
@@ -180,6 +213,13 @@ async function runCycle(
     },
     "LLM decision parsed",
   );
+
+  eventBus?.emit("decision", {
+    action: decision.action,
+    market: decision.market,
+    confidence: decision.confidence,
+    reasoning: decision.reasoning,
+  });
 
   // ── Step 4: CONFIDENCE CHECK ─────────────────────────────────────────
   if (decision.action === "hold" || decision.confidence < MIN_CONFIDENCE_TO_TRADE) {
@@ -308,6 +348,11 @@ async function runCycle(
       price: snapshot.price.toNumber(),
       fee: result.fee?.toNumber() ?? 0,
     });
+    // WS2.7: Record win for circuit breaker
+    await risk.recordWin();
+  } else {
+    // WS2.7: Record loss for circuit breaker
+    await risk.recordLoss();
   }
 
   // Audit log
@@ -317,6 +362,15 @@ async function runCycle(
     { status: verdict.status as "approved" | "rejected" },
     result,
   );
+
+  eventBus?.emit("trade", {
+    success: result.success,
+    market: result.market,
+    side: result.side,
+    size: tradeSize.toNumber(),
+    price: snapshot.price.toNumber(),
+    txHash: result.txHash,
+  });
 
   // Track for LLM context
   recentTrades.push(result);

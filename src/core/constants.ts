@@ -13,8 +13,8 @@ export const GMX_ETH_USD_MARKET = "0x70d95587d40A2caf56bd97485aB3Eec10Bee6336" a
 // CoinGecko free API
 export const COINGECKO_API_BASE = "https://api.coingecko.com/api/v3";
 
-// DeFiLlama
-export const DEFILLAMA_API_BASE = "https://api.llama.fi";
+// DeFiLlama (prices endpoint)
+export const DEFILLAMA_API_BASE = "https://coins.llama.fi";
 
 // Risk engine binary path (relative to project root)
 export const RISK_ENGINE_BIN = "target/release/risk-engine";

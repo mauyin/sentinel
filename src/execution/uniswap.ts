@@ -36,6 +36,12 @@ const PermitDataSchema = z.object({
 const QuoteResponseSchema = z
   .object({
     routing: z.string(),
+    quote: z
+      .object({
+        output: z.string().optional(),
+        outputAmount: z.string().optional(),
+      })
+      .optional(),
     permitData: PermitDataSchema.nullable().optional(),
     requestId: z.string().optional(),
   })
@@ -139,6 +145,32 @@ export class UniswapExecutor implements Executor {
         { routing: quoteResult.routing, requestId: quoteResult.requestId },
         "quote received",
       );
+
+      // WS2.4: Slippage guard — reject if quote output is excessively below expected
+      const quoteOutput = quoteResult.quote?.output ?? quoteResult.quote?.outputAmount;
+      if (quoteOutput) {
+        const outputNum = Number(quoteOutput);
+        const inputNum = Number(amount);
+        if (inputNum > 0 && outputNum > 0) {
+          // Calculate effective slippage: if output < 95% of expected output, reject
+          const expectedMinOutput = inputNum * (1 - slippageBps / 10000) * 0.95;
+          if (outputNum < expectedMinOutput) {
+            const effectiveSlippage = ((inputNum - outputNum) / inputNum) * 10000;
+            this.log.error(
+              {
+                inputAmount: amount,
+                quoteOutput,
+                expectedMinOutput,
+                effectiveSlippageBps: effectiveSlippage.toFixed(0),
+              },
+              "EXCESSIVE_SLIPPAGE: quote output far below expected",
+            );
+            throw new Error(
+              `EXCESSIVE_SLIPPAGE: output ${quoteOutput} < expected min ${expectedMinOutput.toFixed(0)} (${effectiveSlippage.toFixed(0)}bps)`,
+            );
+          }
+        }
+      }
 
       // Step 3: Handle Permit2 signing if needed
       let signature: string | undefined;

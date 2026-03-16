@@ -8,22 +8,26 @@ import { getLogger } from "../infra/logger.js";
 interface RiskCommand {
   command: string;
   payload?: unknown;
+  seq?: number;
 }
 
 interface RiskResponse {
   status: string;
+  seq?: number;
   [key: string]: unknown;
 }
 
+const BRIDGE_TIMEOUT_MS = 5_000;
+
 /**
  * Bridge to the Rust risk engine binary.
- * Communicates via JSON over stdin/stdout.
+ * Communicates via JSON over stdin/stdout with sequence IDs (WS1.5, WS2.1, WS2.2).
  */
 export class RiskBridge {
   private process: ChildProcess | null = null;
   private pending = new Map<
     number,
-    { resolve: (v: RiskResponse) => void; reject: (e: Error) => void }
+    { resolve: (v: RiskResponse) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private seq = 0;
   private binPath: string;
@@ -51,12 +55,24 @@ export class RiskBridge {
     rl.on("line", (line) => {
       try {
         const response = JSON.parse(line) as RiskResponse;
-        // Resolve the oldest pending request (FIFO)
-        const first = this.pending.entries().next();
-        if (!first.done) {
-          const [id, handler] = first.value;
-          this.pending.delete(id);
+        // WS2.2: Match response to request by seq ID
+        const responseSeq = response.seq;
+        if (responseSeq !== undefined && this.pending.has(responseSeq)) {
+          const handler = this.pending.get(responseSeq)!;
+          this.pending.delete(responseSeq);
+          clearTimeout(handler.timer);
           handler.resolve(response);
+        } else {
+          // Fallback: resolve the oldest pending request (FIFO) for backward compat
+          const first = this.pending.entries().next();
+          if (!first.done) {
+            const [id, handler] = first.value;
+            this.pending.delete(id);
+            clearTimeout(handler.timer);
+            handler.resolve(response);
+          } else {
+            log.warn({ responseSeq }, "received response with no matching pending request");
+          }
         }
       } catch (err) {
         log.error({ line, err }, "failed to parse risk engine response");
@@ -70,6 +86,7 @@ export class RiskBridge {
     this.process.on("exit", (code) => {
       log.info({ code }, "risk engine process exited");
       for (const [, handler] of this.pending) {
+        clearTimeout(handler.timer);
         handler.reject(new Error(`risk engine exited with code ${code}`));
       }
       this.pending.clear();
@@ -85,10 +102,19 @@ export class RiskBridge {
     }
 
     const id = this.seq++;
-    const line = JSON.stringify(cmd) + "\n";
+    // WS1.5: Include seq in command
+    const line = JSON.stringify({ ...cmd, seq: id }) + "\n";
 
     return new Promise<RiskResponse>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      // WS2.1: Timeout — reject if Rust engine doesn't respond in time
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        const err = new Error(`RISK_ENGINE_TIMEOUT: no response for seq ${id} within ${BRIDGE_TIMEOUT_MS}ms`);
+        getLogger().error({ seq: id, command: cmd.command }, "risk engine timeout");
+        reject(err);
+      }, BRIDGE_TIMEOUT_MS);
+
+      this.pending.set(id, { resolve, reject, timer });
 
       const ok = this.process!.stdin!.write(line);
       if (!ok) {
@@ -115,6 +141,7 @@ export class RiskBridge {
     size: number;
     price: number;
     fee: number;
+    pending?: boolean;
   }): Promise<RiskResponse> {
     return this.send({ command: "process_fill", payload: fill });
   }
@@ -154,8 +181,55 @@ export class RiskBridge {
     return this.send({ command: "init_account", payload: { equity } });
   }
 
+  // ── Circuit breaker commands ────────────────────────────────────────
+
+  async checkCircuit(): Promise<RiskResponse> {
+    return this.send({ command: "check_circuit" });
+  }
+
+  async tripCircuit(): Promise<RiskResponse> {
+    return this.send({ command: "trip_circuit" });
+  }
+
+  async resetCircuit(): Promise<RiskResponse> {
+    return this.send({ command: "reset_circuit" });
+  }
+
+  async configureCircuit(config: {
+    max_consecutive_losses: number;
+    max_equity_drop_rate_bps: number;
+    max_data_staleness_secs: number;
+  }): Promise<RiskResponse> {
+    return this.send({ command: "configure_circuit", payload: config });
+  }
+
+  // ── Pending order commands ──────────────────────────────────────────
+
+  async confirmFill(market: string): Promise<RiskResponse> {
+    return this.send({ command: "confirm_fill", payload: { market } });
+  }
+
+  async rollbackPending(market: string): Promise<RiskResponse> {
+    return this.send({ command: "rollback_pending", payload: { market } });
+  }
+
+  // ── Loss/win tracking ───────────────────────────────────────────────
+
+  async recordLoss(): Promise<RiskResponse> {
+    return this.send({ command: "record_loss" });
+  }
+
+  async recordWin(): Promise<RiskResponse> {
+    return this.send({ command: "record_win" });
+  }
+
   stop(): void {
     if (this.process) {
+      // Clear all pending timeouts
+      for (const [, handler] of this.pending) {
+        clearTimeout(handler.timer);
+      }
+      this.pending.clear();
       this.process.stdin?.end();
       this.process.kill();
       this.process = null;

@@ -1,4 +1,4 @@
-use crate::types::{Decimal, Fill, Position};
+use crate::types::{Decimal, Fill, Position, PositionState};
 
 /// Calculate unrealized PnL for a position at current price.
 /// Long:  (current_price - entry_price) * size
@@ -33,6 +33,7 @@ pub fn process_fill(
                 entry_price: fill.price,
                 leverage: Decimal::from_f64(1.0),
                 unrealized_pnl: Decimal::ZERO,
+                state: PositionState::Confirmed,
             };
             return (Some(pos), Decimal::ZERO);
         }
@@ -54,6 +55,7 @@ pub fn process_fill(
             entry_price: weighted_entry,
             leverage: existing.leverage,
             unrealized_pnl: Decimal::ZERO,
+            state: existing.state,
         };
         return (Some(pos), Decimal::ZERO);
     }
@@ -77,6 +79,7 @@ pub fn process_fill(
             entry_price: existing.entry_price,
             leverage: existing.leverage,
             unrealized_pnl: Decimal::ZERO,
+            state: existing.state,
         };
         (Some(pos), realized)
     } else if remaining_fill.is_positive() {
@@ -88,6 +91,7 @@ pub fn process_fill(
             entry_price: fill.price,
             leverage: Decimal::from_f64(1.0),
             unrealized_pnl: Decimal::ZERO,
+            state: PositionState::Confirmed,
         };
         (Some(pos), realized)
     } else {
@@ -117,60 +121,53 @@ mod tests {
     use super::*;
     use crate::types::Side;
 
-    #[test]
-    fn test_unrealized_pnl_long_profit() {
-        let pos = Position {
+    fn test_pos(side: Side, size: f64, entry: f64) -> Position {
+        Position {
             market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(2.0),
-            entry_price: Decimal::from_f64(3000.0),
+            side,
+            size: Decimal::from_f64(size),
+            entry_price: Decimal::from_f64(entry),
             leverage: Decimal::from_f64(1.0),
             unrealized_pnl: Decimal::ZERO,
-        };
+            state: PositionState::Confirmed,
+        }
+    }
+
+    fn test_fill(side: Side, size: f64, price: f64, fee: f64) -> Fill {
+        Fill {
+            market: "ETH-USD".to_string(),
+            side,
+            size: Decimal::from_f64(size),
+            price: Decimal::from_f64(price),
+            fee: Decimal::from_f64(fee),
+            pending: false,
+        }
+    }
+
+    #[test]
+    fn test_unrealized_pnl_long_profit() {
+        let pos = test_pos(Side::Long, 2.0, 3000.0);
         let pnl = unrealized_pnl(&pos, Decimal::from_f64(3100.0));
-        // (3100 - 3000) * 2 = 200
         assert_eq!(pnl.to_f64(), 200.0);
     }
 
     #[test]
     fn test_unrealized_pnl_long_loss() {
-        let pos = Position {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(1.0),
-            entry_price: Decimal::from_f64(3000.0),
-            leverage: Decimal::from_f64(1.0),
-            unrealized_pnl: Decimal::ZERO,
-        };
+        let pos = test_pos(Side::Long, 1.0, 3000.0);
         let pnl = unrealized_pnl(&pos, Decimal::from_f64(2900.0));
-        // (2900 - 3000) * 1 = -100
         assert_eq!(pnl.to_f64(), -100.0);
     }
 
     #[test]
     fn test_unrealized_pnl_short_profit() {
-        let pos = Position {
-            market: "ETH-USD".to_string(),
-            side: Side::Short,
-            size: Decimal::from_f64(1.5),
-            entry_price: Decimal::from_f64(3000.0),
-            leverage: Decimal::from_f64(1.0),
-            unrealized_pnl: Decimal::ZERO,
-        };
+        let pos = test_pos(Side::Short, 1.5, 3000.0);
         let pnl = unrealized_pnl(&pos, Decimal::from_f64(2800.0));
-        // (3000 - 2800) * 1.5 = 300
         assert_eq!(pnl.to_f64(), 300.0);
     }
 
     #[test]
     fn test_new_position_from_fill() {
-        let fill = Fill {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(1.0),
-            price: Decimal::from_f64(3000.0),
-            fee: Decimal::from_f64(3.0),
-        };
+        let fill = test_fill(Side::Long, 1.0, 3000.0, 3.0);
         let (pos, realized) = process_fill(None, &fill);
         assert!(pos.is_some());
         let pos = pos.unwrap();
@@ -181,101 +178,44 @@ mod tests {
 
     #[test]
     fn test_add_to_position_same_side() {
-        let existing = Position {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(1.0),
-            entry_price: Decimal::from_f64(3000.0),
-            leverage: Decimal::from_f64(1.0),
-            unrealized_pnl: Decimal::ZERO,
-        };
-        let fill = Fill {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(1.0),
-            price: Decimal::from_f64(3200.0),
-            fee: Decimal::ZERO,
-        };
+        let existing = test_pos(Side::Long, 1.0, 3000.0);
+        let fill = test_fill(Side::Long, 1.0, 3200.0, 0.0);
         let (pos, realized) = process_fill(Some(&existing), &fill);
         let pos = pos.unwrap();
         assert_eq!(pos.size.to_f64(), 2.0);
-        // Weighted avg: (3000*1 + 3200*1) / 2 = 3100
         assert_eq!(pos.entry_price.to_f64(), 3100.0);
         assert_eq!(realized.to_f64(), 0.0);
     }
 
     #[test]
     fn test_partial_close() {
-        let existing = Position {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(2.0),
-            entry_price: Decimal::from_f64(3000.0),
-            leverage: Decimal::from_f64(1.0),
-            unrealized_pnl: Decimal::ZERO,
-        };
-        let fill = Fill {
-            market: "ETH-USD".to_string(),
-            side: Side::Short,
-            size: Decimal::from_f64(1.0),
-            price: Decimal::from_f64(3200.0),
-            fee: Decimal::from_f64(3.2),
-        };
+        let existing = test_pos(Side::Long, 2.0, 3000.0);
+        let fill = test_fill(Side::Short, 1.0, 3200.0, 3.2);
         let (pos, realized) = process_fill(Some(&existing), &fill);
         let pos = pos.unwrap();
         assert_eq!(pos.size.to_f64(), 1.0);
         assert_eq!(pos.side, Side::Long);
-        // Realized: (3200 - 3000) * 1 - 3.2 = 196.8
         assert_eq!(realized.to_f64(), 196.8);
     }
 
     #[test]
     fn test_full_close() {
-        let existing = Position {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(1.0),
-            entry_price: Decimal::from_f64(3000.0),
-            leverage: Decimal::from_f64(1.0),
-            unrealized_pnl: Decimal::ZERO,
-        };
-        let fill = Fill {
-            market: "ETH-USD".to_string(),
-            side: Side::Short,
-            size: Decimal::from_f64(1.0),
-            price: Decimal::from_f64(3500.0),
-            fee: Decimal::ZERO,
-        };
+        let existing = test_pos(Side::Long, 1.0, 3000.0);
+        let fill = test_fill(Side::Short, 1.0, 3500.0, 0.0);
         let (pos, realized) = process_fill(Some(&existing), &fill);
         assert!(pos.is_none());
-        // Realized: (3500 - 3000) * 1 = 500
         assert_eq!(realized.to_f64(), 500.0);
     }
 
     #[test]
     fn test_position_flip() {
-        let existing = Position {
-            market: "ETH-USD".to_string(),
-            side: Side::Long,
-            size: Decimal::from_f64(1.0),
-            entry_price: Decimal::from_f64(3000.0),
-            leverage: Decimal::from_f64(1.0),
-            unrealized_pnl: Decimal::ZERO,
-        };
-        let fill = Fill {
-            market: "ETH-USD".to_string(),
-            side: Side::Short,
-            size: Decimal::from_f64(2.0),
-            price: Decimal::from_f64(2800.0),
-            fee: Decimal::ZERO,
-        };
+        let existing = test_pos(Side::Long, 1.0, 3000.0);
+        let fill = test_fill(Side::Short, 2.0, 2800.0, 0.0);
         let (pos, realized) = process_fill(Some(&existing), &fill);
         let pos = pos.unwrap();
-        // Flipped to short with size 1.0 at 2800
         assert_eq!(pos.side, Side::Short);
         assert_eq!(pos.size.to_f64(), 1.0);
         assert_eq!(pos.entry_price.to_f64(), 2800.0);
-        // Realized from closing long: (2800 - 3000) * 1 = -200
         assert_eq!(realized.to_f64(), -200.0);
     }
 

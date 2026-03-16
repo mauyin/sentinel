@@ -5,7 +5,7 @@ import { initLlm } from "./llm/provider.js";
 import { RiskBridge } from "./risk/bridge.js";
 import { AuditLogger } from "./audit/logger.js";
 import { createRouter } from "./execution/router.js";
-import { MARKET_PAIRS } from "./config/markets.js";
+import { loadMarkets } from "./config/markets.js";
 import { DEFAULT_TICK_SIZE } from "./core/constants.js";
 import { fetchPrices } from "./market/feed.js";
 import { fetchPortfolio } from "./market/portfolio.js";
@@ -13,6 +13,8 @@ import { getPublicClient, getAccount } from "./infra/rpc.js";
 import { runAutonomous } from "./agent/autonomous.js";
 import { runInteractive } from "./agent/interactive.js";
 import { runSmoke } from "./agent/smoke.js";
+import { EventBus } from "./infra/events.js";
+import { startDashboard } from "./dashboard/server.js";
 
 type Mode = "autonomous" | "interactive" | "smoke";
 
@@ -40,6 +42,9 @@ async function main(): Promise<void> {
     case "autonomous":
     case "interactive":
     case "smoke": {
+      // Load markets from YAML config (or fallback to hardcoded)
+      const markets = loadMarkets(process.cwd());
+
       const risk = new RiskBridge(process.cwd());
       await risk.start();
       await risk.configure({
@@ -49,8 +54,15 @@ async function main(): Promise<void> {
         cooldown_seconds: env.COOLDOWN_SECONDS,
       });
 
+      // Configure circuit breaker
+      await risk.configureCircuit({
+        max_consecutive_losses: env.MAX_CONSECUTIVE_LOSSES,
+        max_equity_drop_rate_bps: env.MAX_EQUITY_DROP_RATE_BPS,
+        max_data_staleness_secs: env.MAX_DATA_STALENESS_SECS,
+      });
+
       // Register all markets with the risk engine
-      for (const market of MARKET_PAIRS) {
+      for (const market of markets) {
         const res = await risk.addMarket({
           symbol: market.id,
           initial_margin_bps: market.initialMarginBps,
@@ -69,11 +81,11 @@ async function main(): Promise<void> {
       if (equity === 0) {
         try {
           const account = getAccount(env.AGENT_PRIVATE_KEY as `0x${string}`);
-          const primaryMarket = MARKET_PAIRS[0]!;
+          const primaryMarket = markets[0]!;
           const client = getPublicClient(primaryMarket.chainId);
-          const coingeckoIds = [...new Set(MARKET_PAIRS.flatMap((m) => [m.baseToken.coingeckoId, m.quoteToken.coingeckoId]))];
+          const coingeckoIds = [...new Set(markets.flatMap((m) => [m.baseToken.coingeckoId, m.quoteToken.coingeckoId]))];
           const prices = await fetchPrices(coingeckoIds);
-          const allTokens = MARKET_PAIRS
+          const allTokens = markets
             .filter((m) => m.chainId === primaryMarket.chainId)
             .flatMap((m) => [m.baseToken, m.quoteToken]);
           const uniqueTokens = allTokens.filter(
@@ -97,14 +109,28 @@ async function main(): Promise<void> {
       if (initRes.status !== "account_initialized") {
         throw new Error(`failed to init account: ${JSON.stringify(initRes)}`);
       }
-      log.info({ marketsRegistered: MARKET_PAIRS.length, equity }, "risk engine initialized");
+      log.info({ marketsRegistered: markets.length, equity }, "risk engine initialized");
 
       const audit = new AuditLogger(process.cwd());
       await audit.init();
 
       const executor = createRouter(env);
 
-      const deps = { env, llm, risk, audit, executor, markets: MARKET_PAIRS };
+      // EventBus + Dashboard
+      const eventBus = new EventBus();
+
+      if (env.ALERT_WEBHOOK_URL) {
+        eventBus.setupWebhook(env.ALERT_WEBHOOK_URL);
+      }
+
+      startDashboard({
+        risk,
+        audit,
+        eventBus,
+        port: env.DASHBOARD_PORT,
+      });
+
+      const deps = { env, llm, risk, audit, executor, markets, eventBus };
 
       try {
         if (mode === "autonomous") {

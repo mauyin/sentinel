@@ -94,6 +94,7 @@ mod tests {
             entry_price: Decimal::from_f64(3000.0),
             leverage: Decimal::from_f64(5.0),
             unrealized_pnl: Decimal::ZERO,
+            state: crate::types::PositionState::Confirmed,
         };
         let config = test_config();
         let margin = maintenance_margin(&pos, Decimal::from_f64(3100.0), &config);

@@ -1,3 +1,4 @@
+pub mod circuit;
 pub mod engine;
 pub mod limits;
 pub mod margin;

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sentinel — DeFi Trading Agent</title>
+  <style>
+    :root {
+      --bg: #0a0e17;
+      --surface: #111827;
+      --border: #1f2937;
+      --text: #e5e7eb;
+      --muted: #6b7280;
+      --green: #10b981;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --blue: #3b82f6;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; }
+    .status { display: flex; gap: 16px; align-items: center; font-size: 0.875rem; }
+    .indicator {
+      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+    }
+    .indicator.closed { background: var(--green); }
+    .indicator.open { background: var(--red); animation: pulse 1s infinite; }
+    .indicator.half_open { background: var(--yellow); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    @media (max-width: 768px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+    }
+    .card h2 {
+      font-size: 0.875rem; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 12px;
+    }
+    .metric {
+      font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    }
+    .metric.positive { color: var(--green); }
+    .metric.negative { color: var(--red); }
+    .sub { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+    td { padding: 8px 4px; border-bottom: 1px solid var(--border); }
+    .full-width { grid-column: 1 / -1; }
+    .timeline { max-height: 300px; overflow-y: auto; }
+    .timeline-item {
+      padding: 8px 0; border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+    }
+    .timeline-item:last-child { border-bottom: none; }
+    .tag {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 0.75rem; font-weight: 600;
+    }
+    .tag.buy { background: rgba(16, 185, 129, 0.2); color: var(--green); }
+    .tag.sell { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .tag.hold { background: rgba(107, 114, 128, 0.2); color: var(--muted); }
+    .tag.approved { background: rgba(16, 185, 129, 0.2); color: var(--green); }
+    .tag.rejected { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .sparkline { display: flex; align-items: end; gap: 2px; height: 60px; }
+    .sparkline .bar {
+      flex: 1; background: var(--blue); border-radius: 2px 2px 0 0;
+      min-height: 2px; transition: height 0.3s;
+    }
+    .connection-status {
+      font-size: 0.75rem; padding: 4px 8px; border-radius: 4px;
+    }
+    .connected { background: rgba(16, 185, 129, 0.2); color: var(--green); }
+    .disconnected { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Sentinel</h1>
+      <div class="status">
+        <span>Circuit: <span class="indicator" id="cb-indicator"></span> <span id="cb-state">-</span></span>
+        <span id="connection-status" class="connection-status disconnected">Disconnected</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Equity</h2>
+        <div class="metric" id="equity">$0.00</div>
+        <div class="sub">Peak: <span id="peak-equity">$0.00</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Unrealized PnL</h2>
+        <div class="metric" id="unrealized-pnl">$0.00</div>
+        <div class="sub">Realized: <span id="realized-pnl">$0.00</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Equity Curve</h2>
+        <div class="sparkline" id="sparkline"></div>
+      </div>
+
+      <div class="card">
+        <h2>Risk State</h2>
+        <div style="font-size: 0.875rem;">
+          <div>Daily Volume: <strong id="daily-volume">$0</strong></div>
+          <div>Positions: <strong id="position-count">0</strong></div>
+          <div>Price Age: <strong id="price-age">-</strong></div>
+        </div>
+      </div>
+
+      <div class="card full-width">
+        <h2>Open Positions</h2>
+        <table>
+          <thead>
+            <tr><th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>uPnL</th><th>State</th></tr>
+          </thead>
+          <tbody id="positions-table"></tbody>
+        </table>
+      </div>
+
+      <div class="card full-width">
+        <h2>Recent Decisions</h2>
+        <div class="timeline" id="decisions-timeline"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const equityHistory = [];
+    const MAX_SPARKLINE = 30;
+
+    function fmt(n) { return typeof n === 'number' ? `$${n.toFixed(2)}` : '$0.00'; }
+    function fmtDec(d) {
+      if (typeof d === 'number') return d;
+      if (d && typeof d === 'object' && d[0] !== undefined) return d[0] / 1e8;
+      return 0;
+    }
+
+    async function fetchState() {
+      try {
+        const res = await fetch('/api/state');
+        const state = await res.json();
+        const acct = state.account || {};
+        const equity = fmtDec(acct.equity);
+        const peak = fmtDec(acct.peak_equity);
+        const realized = fmtDec(acct.realized_pnl);
+        const positions = acct.positions || [];
+
+        let unrealized = 0;
+        positions.forEach(p => { unrealized += fmtDec(p.unrealized_pnl); });
+
+        document.getElementById('equity').textContent = fmt(equity);
+        document.getElementById('equity').className = 'metric' + (equity >= peak ? ' positive' : '');
+        document.getElementById('peak-equity').textContent = fmt(peak);
+        document.getElementById('unrealized-pnl').textContent = fmt(unrealized);
+        document.getElementById('unrealized-pnl').className = 'metric' + (unrealized >= 0 ? ' positive' : ' negative');
+        document.getElementById('realized-pnl').textContent = fmt(realized);
+        document.getElementById('daily-volume').textContent = fmt(fmtDec(state.daily_volume));
+        document.getElementById('position-count').textContent = positions.length;
+
+        // Circuit breaker
+        const cbState = state.circuit_breaker || 'closed';
+        document.getElementById('cb-state').textContent = cbState;
+        const ind = document.getElementById('cb-indicator');
+        ind.className = 'indicator ' + cbState;
+
+        // Positions table
+        const tbody = document.getElementById('positions-table');
+        tbody.innerHTML = positions.length === 0
+          ? '<tr><td colspan="6" style="color: var(--muted)">No open positions</td></tr>'
+          : positions.map(p =>
+            `<tr>
+              <td>${p.market}</td>
+              <td><span class="tag ${p.side === 'long' ? 'buy' : 'sell'}">${p.side}</span></td>
+              <td>${fmtDec(p.size).toFixed(4)}</td>
+              <td>${fmt(fmtDec(p.entry_price))}</td>
+              <td style="color: ${fmtDec(p.unrealized_pnl) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(fmtDec(p.unrealized_pnl))}</td>
+              <td>${p.state || 'confirmed'}</td>
+            </tr>`
+          ).join('');
+
+        // Sparkline
+        equityHistory.push(equity);
+        if (equityHistory.length > MAX_SPARKLINE) equityHistory.shift();
+        const min = Math.min(...equityHistory);
+        const max = Math.max(...equityHistory);
+        const range = max - min || 1;
+        const sparkline = document.getElementById('sparkline');
+        sparkline.innerHTML = equityHistory.map(v => {
+          const height = ((v - min) / range * 50 + 10).toFixed(0);
+          return `<div class="bar" style="height: ${height}px"></div>`;
+        }).join('');
+      } catch (e) {
+        console.error('Failed to fetch state:', e);
+      }
+    }
+
+    async function fetchDecisions() {
+      try {
+        const res = await fetch('/api/decisions');
+        const decisions = await res.json();
+        const timeline = document.getElementById('decisions-timeline');
+        if (decisions.length === 0) {
+          timeline.innerHTML = '<div style="color: var(--muted)">No decisions yet</div>';
+          return;
+        }
+        timeline.innerHTML = decisions.slice().reverse().map(d => {
+          const time = new Date(d.timestamp).toLocaleTimeString();
+          const action = d.decision?.action || '?';
+          const verdict = d.riskVerdict?.status || '?';
+          const confidence = d.decision?.confidence || 0;
+          const market = d.decision?.market || '?';
+          const tx = d.tradeResult?.txHash ? `<span style="color: var(--muted)"> tx: ${d.tradeResult.txHash.slice(0, 10)}...</span>` : '';
+          return `<div class="timeline-item">
+            <span style="color: var(--muted)">${time}</span>
+            <span class="tag ${action}">${action}</span>
+            <span class="tag ${verdict}">${verdict}</span>
+            <strong>${market}</strong>
+            (${confidence}% conf)${tx}
+          </div>`;
+        }).join('');
+      } catch (e) {
+        console.error('Failed to fetch decisions:', e);
+      }
+    }
+
+    async function fetchHealth() {
+      try {
+        const res = await fetch('/api/health');
+        const health = await res.json();
+        const ageMs = health.priceAgeMs;
+        const ageStr = ageMs === Infinity ? 'never' : ageMs < 60000 ? `${(ageMs/1000).toFixed(0)}s` : `${(ageMs/60000).toFixed(1)}m`;
+        document.getElementById('price-age').textContent = ageStr;
+      } catch (e) {}
+    }
+
+    // SSE connection
+    function connectSSE() {
+      const status = document.getElementById('connection-status');
+      const es = new EventSource('/events');
+
+      es.onopen = () => {
+        status.textContent = 'Live';
+        status.className = 'connection-status connected';
+      };
+
+      es.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'trade' || payload.type === 'decision' || payload.type === 'circuit') {
+            fetchState();
+            fetchDecisions();
+          }
+        } catch {}
+      };
+
+      es.onerror = () => {
+        status.textContent = 'Disconnected';
+        status.className = 'connection-status disconnected';
+        es.close();
+        setTimeout(connectSSE, 5000);
+      };
+    }
+
+    // Initial load + polling
+    fetchState();
+    fetchDecisions();
+    fetchHealth();
+    setInterval(fetchState, 10000);
+    setInterval(fetchDecisions, 15000);
+    setInterval(fetchHealth, 30000);
+    connectSSE();
+  </script>
+</body>
+</html>
