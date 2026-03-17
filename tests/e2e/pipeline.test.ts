@@ -296,6 +296,15 @@ describe.skipIf(!binaryExists)("E2E pipeline", () => {
   });
 
   it("mock executor produces valid TradeResult", async () => {
+    // Spy on rpc to mock gas balance check (avoids real RPC call)
+    const rpc = await import("../../src/infra/rpc.js");
+    const getPublicSpy = vi.spyOn(rpc, "getPublicClient").mockReturnValue({
+      getBalance: vi.fn().mockResolvedValue(10_000_000_000_000_000n),
+    } as any);
+    const getAccountSpy = vi.spyOn(rpc, "getAccount").mockReturnValue({
+      address: "0xTestAddress",
+    } as any);
+
     class TestMockExecutor implements Executor {
       async execute(params: ExecuteParams): Promise<TradeResult> {
         return {
@@ -310,7 +319,7 @@ describe.skipIf(!binaryExists)("E2E pipeline", () => {
       }
     }
 
-    const router = new ExecutionRouter();
+    const router = new ExecutionRouter({ AGENT_PRIVATE_KEY: "0x" + "ab".repeat(32) } as any);
     router.register(8453 as any, new TestMockExecutor());
 
     const result = await router.execute({
@@ -325,5 +334,8 @@ describe.skipIf(!binaryExists)("E2E pipeline", () => {
     expect(result.success).toBe(true);
     expect(result.market).toBe(TEST_MARKET.id);
     expect(result.txHash).toBeDefined();
+
+    getPublicSpy.mockRestore();
+    getAccountSpy.mockRestore();
   });
 });

@@ -59,6 +59,14 @@ describe("parseTradeDecision", () => {
     expect(result!.action).toBe("sell");
   });
 
+  it("parses close action", () => {
+    const close = { ...VALID_DECISION, action: "close", size: null };
+    const result = parseTradeDecision(JSON.stringify(close));
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("close");
+    expect(result!.size).toBeUndefined();
+  });
+
   it("accepts missing optional fields (timeHorizon, riskLevel)", () => {
     const minimal = {
       action: "buy",
