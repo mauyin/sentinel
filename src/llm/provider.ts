@@ -3,6 +3,9 @@ import { getLogger } from "../infra/logger.js";
 
 let _client: OpenAI | undefined;
 
+const LLM_RETRY_DELAY_MS = 5_000;
+const LLM_MAX_RETRIES = 1;
+
 export interface LlmConfig {
   baseUrl: string;
   apiKey: string;
@@ -40,31 +43,54 @@ export async function chat(
   const log = getLogger();
   const client = _client ?? initLlm(config);
 
-  const start = Date.now();
+  let lastError: Error | undefined;
 
-  const response = await client.chat.completions.create({
-    model: config.model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ],
-    temperature: 0.3,
-    max_tokens: 2048,
-  });
+  for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) {
+        log.warn(
+          { attempt, delay: LLM_RETRY_DELAY_MS },
+          "retrying LLM request after failure",
+        );
+        await new Promise((r) => setTimeout(r, LLM_RETRY_DELAY_MS));
+      }
 
-  const content = response.choices[0]?.message?.content ?? "";
-  const elapsed = Date.now() - start;
+      const start = Date.now();
 
-  log.info(
-    {
-      model: config.model,
-      elapsed,
-      tokens: response.usage?.total_tokens,
-      inputTokens: response.usage?.prompt_tokens,
-      outputTokens: response.usage?.completion_tokens,
-    },
-    "llm response received",
-  );
+      const response = await client.chat.completions.create({
+        model: config.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        temperature: 0.3,
+        max_tokens: 2048,
+      });
 
-  return content;
+      const content = response.choices[0]?.message?.content ?? "";
+      const elapsed = Date.now() - start;
+
+      log.info(
+        {
+          model: config.model,
+          elapsed,
+          tokens: response.usage?.total_tokens,
+          inputTokens: response.usage?.prompt_tokens,
+          outputTokens: response.usage?.completion_tokens,
+          attempt,
+        },
+        "llm response received",
+      );
+
+      return content;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      log.error(
+        { err: lastError, attempt, maxRetries: LLM_MAX_RETRIES },
+        "LLM request failed",
+      );
+    }
+  }
+
+  throw lastError ?? new Error("LLM request failed after retries");
 }

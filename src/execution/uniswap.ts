@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Env } from "../config/env.js";
 import type { SupportedChainId } from "../config/chains.js";
-import type { Executor, ExecuteParams } from "./router.js";
+import type { Executor, ExecuteParams, CloseParams } from "./router.js";
 import type { TradeResult } from "../core/types.js";
 import { Decimal } from "../core/types.js";
 import { getWalletClient, getPublicClient } from "../infra/rpc.js";
@@ -271,6 +271,24 @@ export class UniswapExecutor implements Executor {
         timestamp: Date.now(),
       };
     }
+  }
+
+  /**
+   * Close a position by executing a reverse swap.
+   * Long close = sell base token for quote token.
+   * Short close = buy base token with quote token.
+   */
+  async closePosition(params: CloseParams): Promise<TradeResult> {
+    // Close is the reverse of open: close long = sell, close short = buy
+    const reverseSide = params.side === "long" ? "short" : "long";
+    return this.execute({
+      market: params.market,
+      side: reverseSide,
+      sizeUsd: params.size,
+      price: params.price,
+      slippageBps: params.slippageBps,
+      deadlineSeconds: 180,
+    });
   }
 
   private async checkAndApprove(

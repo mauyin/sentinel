@@ -16,6 +16,7 @@ import {
 } from "../market/analyzer.js";
 import { computeTradeSize, resolveProposedSizeUsd } from "../risk/sizer.js";
 import { getPublicClient, getAccount } from "../infra/rpc.js";
+import { childLogger } from "../infra/logger.js";
 import {
   uniqueCoingeckoIds,
   dedupeTokens,
@@ -23,11 +24,13 @@ import {
   findMarketPair,
 } from "./autonomous.js";
 
+const log = childLogger({ component: "smoke" });
+
 export async function runSmoke(deps: AgentDeps): Promise<void> {
   const { env, llm, risk, markets } = deps;
 
   // ── Step 1: OBSERVE ──────────────────────────────────────────────────
-  console.log("\n[1/6] Fetching market data...");
+  log.info("step 1/6: fetching market data");
   const coingeckoIds = uniqueCoingeckoIds(markets);
   const [snapshots, prices] = await Promise.all([
     fetchMarketSnapshots(coingeckoIds),
@@ -35,16 +38,19 @@ export async function runSmoke(deps: AgentDeps): Promise<void> {
   ]);
 
   if (snapshots.length === 0) {
-    console.error("No market data returned — aborting");
+    log.error("no market data returned — aborting");
     process.exit(1);
   }
-  console.log(`  ${snapshots.length} market snapshot(s) fetched`);
+  log.info({ count: snapshots.length }, "market snapshots fetched");
   for (const s of snapshots) {
-    console.log(`  ${s.market}: $${s.price.toFixed(2)} (${s.change24h > 0 ? "+" : ""}${s.change24h.toFixed(2)}%)`);
+    log.info(
+      { market: s.market, price: s.price.toFixed(2), change24h: s.change24h.toFixed(2) },
+      "market snapshot",
+    );
   }
 
   // ── Step 2: PORTFOLIO ────────────────────────────────────────────────
-  console.log("\n[2/6] Fetching portfolio...");
+  log.info("step 2/6: fetching portfolio");
   const account = getAccount(env.AGENT_PRIVATE_KEY as `0x${string}`);
   const primaryMarket = markets[0]!;
   const client = getPublicClient(primaryMarket.chainId);
@@ -59,14 +65,19 @@ export async function runSmoke(deps: AgentDeps): Promise<void> {
     primaryMarket.chainId,
     prices,
   );
-  console.log(`  Wallet: ${account.address}`);
-  console.log(`  Total value: $${portfolio.totalValueUsd.toFixed(2)}`);
+  log.info(
+    { wallet: account.address, totalValueUsd: portfolio.totalValueUsd.toFixed(2) },
+    "portfolio fetched",
+  );
   for (const b of portfolio.balances) {
-    console.log(`  ${b.symbol}: ${b.balance.toFixed(6)} ($${b.valueUsd.toFixed(2)})`);
+    log.info(
+      { symbol: b.symbol, balance: b.balance.toFixed(6), valueUsd: b.valueUsd.toFixed(2) },
+      "token balance",
+    );
   }
 
   // ── Step 3: LLM ANALYSIS ────────────────────────────────────────────
-  console.log("\n[3/6] Querying LLM for trade decision...");
+  log.info("step 3/6: querying LLM for trade decision");
 
   const riskState = await risk.getState();
   const riskCtx: RiskContextData = {
@@ -86,34 +97,38 @@ export async function runSmoke(deps: AgentDeps): Promise<void> {
   const rawResponse = await chat(llm, MARKET_ANALYSIS_SYSTEM, userPrompt);
 
   // ── Step 4: PARSE ────────────────────────────────────────────────────
-  console.log("\n[4/6] Parsing LLM response...");
+  log.info("step 4/6: parsing LLM response");
   const decision = parseTradeDecision(rawResponse);
 
   if (!decision) {
-    console.error("Failed to parse LLM response");
-    console.error("Raw response:", rawResponse);
+    log.error({ rawResponse }, "failed to parse LLM response");
     process.exit(1);
   }
 
-  console.log(`  Action: ${decision.action}`);
-  console.log(`  Market: ${decision.market}`);
-  console.log(`  Confidence: ${decision.confidence}%`);
-  console.log(`  Size: ${decision.size ?? "N/A"}`);
-  console.log(`  Reasoning: ${decision.reasoning}`);
+  log.info(
+    {
+      action: decision.action,
+      market: decision.market,
+      confidence: decision.confidence,
+      size: decision.size ?? "N/A",
+      reasoning: decision.reasoning,
+    },
+    "LLM decision parsed",
+  );
 
   // ── Step 5: RISK VALIDATION ──────────────────────────────────────────
   if (decision.action === "hold") {
-    console.log("\n[5/6] Hold decision — skipping risk validation");
-    console.log("\n[6/6] Smoke test PASSED (hold)");
+    log.info("hold decision — skipping risk validation");
+    log.info("smoke test PASSED (hold)");
     process.exit(0);
   }
 
-  console.log("\n[5/6] Running risk engine validation...");
+  log.info("step 5/6: running risk engine validation");
   const marketPair = findMarketPair(markets, decision.market);
   const snapshot = findSnapshot(snapshots, decision.market);
 
   if (!marketPair || !snapshot) {
-    console.error(`Market "${decision.market}" not found in config`);
+    log.error({ market: decision.market }, "market not found in config");
     process.exit(1);
   }
 
@@ -130,10 +145,10 @@ export async function runSmoke(deps: AgentDeps): Promise<void> {
   });
 
   const tradeSize = sizerResult.sizeUsd;
-  console.log(`  Sizer: ${sizerResult.reasoning}`);
+  log.info({ reasoning: sizerResult.reasoning }, "position size computed");
 
   if (tradeSize.lessThanOrEqualTo(0)) {
-    console.log("\n[6/6] Smoke test PASSED (sizer returned zero — no capacity)");
+    log.info("smoke test PASSED (sizer returned zero — no capacity)");
     process.exit(0);
   }
 
@@ -146,12 +161,15 @@ export async function runSmoke(deps: AgentDeps): Promise<void> {
     leverage: 1,
   });
 
-  console.log(`  Verdict: ${verdict.status}`);
-  if (verdict.reason) {
-    console.log(`  Reason: ${verdict.reason}`);
-  }
+  log.info(
+    { verdict: verdict.status, reason: verdict.reason },
+    "risk engine verdict",
+  );
 
   // ── Step 6: RESULT ───────────────────────────────────────────────────
-  console.log(`\n[6/6] Smoke test PASSED (${decision.action} ${decision.market} → ${verdict.status})`);
+  log.info(
+    { action: decision.action, market: decision.market, verdict: verdict.status },
+    "smoke test PASSED",
+  );
   process.exit(0);
 }

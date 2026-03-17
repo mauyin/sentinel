@@ -9,7 +9,7 @@ export type Decimal = InstanceType<typeof Decimal>;
 export type Side = "long" | "short";
 
 export const TradeDecisionSchema = z.object({
-  action: z.enum(["buy", "sell", "hold"]),
+  action: z.enum(["buy", "sell", "hold", "close"]),
   market: z.string(),
   size: z.number().positive().nullable().optional().transform(v => v ?? undefined),
   confidence: z.number().min(0).max(100),
@@ -79,4 +79,6 @@ export interface AuditEntry {
   decision: TradeDecision;
   riskVerdict: RiskVerdict;
   tradeResult?: TradeResult;
+  hash: string;
+  prevHash: string;
 }

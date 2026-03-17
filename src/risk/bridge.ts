@@ -18,10 +18,13 @@ interface RiskResponse {
 }
 
 const BRIDGE_TIMEOUT_MS = 5_000;
+const RESTART_DELAY_MS = 2_000;
+const MAX_RESTART_ATTEMPTS = 1;
 
 /**
  * Bridge to the Rust risk engine binary.
  * Communicates via JSON over stdin/stdout with sequence IDs (WS1.5, WS2.1, WS2.2).
+ * Auto-restarts on crash with state re-initialization.
  */
 export class RiskBridge {
   private process: ChildProcess | null = null;
@@ -31,11 +34,20 @@ export class RiskBridge {
   >();
   private seq = 0;
   private binPath: string;
+  private restartCount = 0;
+  private restarting = false;
+  private initState?: {
+    markets: { symbol: string; initial_margin_bps: number; maintenance_margin_bps: number; max_leverage: number; tick_size: number; min_size: number }[];
+    equity: number;
+    limits?: { max_trade_size_usd: number; max_daily_volume_usd: number; max_drawdown_bps: number; cooldown_seconds: number };
+  };
+  private onHalt?: () => void;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, onHalt?: () => void) {
     const release = join(projectRoot, RISK_ENGINE_BIN);
     const debug = join(projectRoot, RISK_ENGINE_BIN_DEBUG);
     this.binPath = existsSync(release) ? release : debug;
+    this.onHalt = onHalt;
   }
 
   async start(): Promise<void> {
@@ -84,16 +96,70 @@ export class RiskBridge {
     });
 
     this.process.on("exit", (code) => {
-      log.info({ code }, "risk engine process exited");
+      log.warn({ code }, "risk engine process exited");
       for (const [, handler] of this.pending) {
         clearTimeout(handler.timer);
         handler.reject(new Error(`risk engine exited with code ${code}`));
       }
       this.pending.clear();
       this.process = null;
+
+      // Auto-restart if not intentionally stopped
+      if (!this.restarting) {
+        this.handleCrash(code);
+      }
     });
 
     log.info({ bin: this.binPath }, "risk engine started");
+  }
+
+  private async handleCrash(exitCode: number | null): Promise<void> {
+    const log = getLogger();
+
+    if (this.restartCount >= MAX_RESTART_ATTEMPTS) {
+      log.error(
+        { exitCode, restartCount: this.restartCount },
+        "risk engine crashed too many times — halting trading",
+      );
+      this.onHalt?.();
+      return;
+    }
+
+    this.restartCount++;
+    log.warn(
+      { exitCode, attempt: this.restartCount, delayMs: RESTART_DELAY_MS },
+      "risk engine crashed — attempting restart",
+    );
+
+    this.restarting = true;
+    await new Promise((r) => setTimeout(r, RESTART_DELAY_MS));
+
+    try {
+      await this.start();
+      // Re-initialize state
+      if (this.initState) {
+        if (this.initState.limits) {
+          await this.configure(this.initState.limits);
+        }
+        for (const market of this.initState.markets) {
+          await this.addMarket(market);
+        }
+        await this.initAccount(this.initState.equity);
+      }
+      log.info("risk engine restarted and state re-initialized");
+    } catch (err) {
+      log.error({ err }, "risk engine restart failed — halting trading");
+      this.onHalt?.();
+    } finally {
+      this.restarting = false;
+    }
+  }
+
+  /**
+   * Save initialization state for re-initialization after restart.
+   */
+  saveInitState(state: NonNullable<RiskBridge["initState"]>): void {
+    this.initState = state;
   }
 
   async send(cmd: RiskCommand): Promise<RiskResponse> {
@@ -224,6 +290,7 @@ export class RiskBridge {
   }
 
   stop(): void {
+    this.restarting = true; // Prevent auto-restart on intentional stop
     if (this.process) {
       // Clear all pending timeouts
       for (const [, handler] of this.pending) {

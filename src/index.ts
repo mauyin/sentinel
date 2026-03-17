@@ -50,7 +50,13 @@ async function main(): Promise<void> {
       // Load markets from YAML config (or fallback to hardcoded)
       const markets = loadMarkets(process.cwd());
 
-      const risk = new RiskBridge(process.cwd());
+      // EventBus created early so risk engine crash can emit events
+      const eventBus = new EventBus();
+
+      const risk = new RiskBridge(process.cwd(), () => {
+        log.error("risk engine halted — circuit breaker engaged");
+        eventBus.emit("circuit", { state: "open", reason: "risk_engine_crash" });
+      });
       await risk.start();
       await risk.configure({
         max_trade_size_usd: env.MAX_TRADE_SIZE_USD,
@@ -114,6 +120,25 @@ async function main(): Promise<void> {
       if (initRes.status !== "account_initialized") {
         throw new Error(`failed to init account: ${JSON.stringify(initRes)}`);
       }
+      // Save init state for auto-restart re-initialization
+      risk.saveInitState({
+        markets: markets.map((m) => ({
+          symbol: m.id,
+          initial_margin_bps: m.initialMarginBps,
+          maintenance_margin_bps: m.maintenanceMarginBps,
+          max_leverage: m.maxLeverage,
+          tick_size: DEFAULT_TICK_SIZE,
+          min_size: m.minTradeUsd,
+        })),
+        equity,
+        limits: {
+          max_trade_size_usd: env.MAX_TRADE_SIZE_USD,
+          max_daily_volume_usd: env.MAX_DAILY_VOLUME_USD,
+          max_drawdown_bps: env.MAX_DRAWDOWN_PCT * 100,
+          cooldown_seconds: env.COOLDOWN_SECONDS,
+        },
+      });
+
       log.info({ marketsRegistered: markets.length, equity }, "risk engine initialized");
 
       const audit = new AuditLogger(process.cwd());
@@ -121,9 +146,7 @@ async function main(): Promise<void> {
 
       const executor = createRouter(env);
 
-      // EventBus + Dashboard
-      const eventBus = new EventBus();
-
+      // Dashboard + webhooks
       if (env.ALERT_WEBHOOK_URL) {
         eventBus.setupWebhook(env.ALERT_WEBHOOK_URL);
       }

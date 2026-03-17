@@ -8,6 +8,7 @@
     :root {
       --bg: #0a0e17;
       --surface: #111827;
+      --surface-alt: #1a2235;
       --border: #1f2937;
       --text: #e5e7eb;
       --muted: #6b7280;
@@ -15,6 +16,7 @@
       --red: #ef4444;
       --yellow: #f59e0b;
       --blue: #3b82f6;
+      --purple: #8b5cf6;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -23,134 +25,360 @@
       color: var(--text);
       min-height: 100vh;
     }
-    .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
-    header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+
+    /* Top bar */
+    .top-bar {
+      display: flex; align-items: center; gap: 24px;
+      padding: 12px 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
     }
-    h1 { font-size: 1.5rem; font-weight: 600; }
-    .status { display: flex; gap: 16px; align-items: center; font-size: 0.875rem; }
-    .indicator {
-      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+    .top-bar h1 { font-size: 1.25rem; font-weight: 700; margin-right: auto; }
+    .top-stat {
+      text-align: center; min-width: 100px;
     }
-    .indicator.closed { background: var(--green); }
-    .indicator.open { background: var(--red); animation: pulse 1s infinite; }
-    .indicator.half_open { background: var(--yellow); }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    .top-stat .label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .top-stat .value { font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .top-stat .value.positive { color: var(--green); }
+    .top-stat .value.negative { color: var(--red); }
+    .cb-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border-radius: 16px; font-size: 0.75rem; font-weight: 600;
     }
-    @media (max-width: 768px) {
-      .grid { grid-template-columns: 1fr; }
+    .cb-badge.closed { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .cb-badge.open { background: rgba(239, 68, 68, 0.15); color: var(--red); animation: pulse 1.5s infinite; }
+    .cb-badge.half_open { background: rgba(245, 158, 11, 0.15); color: var(--yellow); }
+    .cb-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    .connection-badge {
+      font-size: 0.7rem; padding: 3px 8px; border-radius: 4px;
     }
-    .card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 16px;
+    .connected { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .disconnected { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+
+    /* Layout */
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr 280px;
+      gap: 0;
+      min-height: calc(100vh - 52px);
     }
-    .card h2 {
-      font-size: 0.875rem; color: var(--muted); text-transform: uppercase;
-      letter-spacing: 0.05em; margin-bottom: 12px;
+    @media (max-width: 1024px) {
+      .layout { grid-template-columns: 1fr; }
     }
-    .metric {
-      font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums;
+
+    /* Left panel — Equity curve */
+    .panel-left {
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      display: flex; flex-direction: column; gap: 16px;
     }
-    .metric.positive { color: var(--green); }
-    .metric.negative { color: var(--red); }
-    .sub { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-    th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 4px; border-bottom: 1px solid var(--border); }
-    td { padding: 8px 4px; border-bottom: 1px solid var(--border); }
-    .full-width { grid-column: 1 / -1; }
-    .timeline { max-height: 300px; overflow-y: auto; }
-    .timeline-item {
-      padding: 8px 0; border-bottom: 1px solid var(--border);
-      font-size: 0.875rem;
+    .panel-center {
+      padding: 16px;
+      overflow-y: auto;
     }
-    .timeline-item:last-child { border-bottom: none; }
+    .panel-right {
+      border-left: 1px solid var(--border);
+      padding: 16px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+
+    .section-title {
+      font-size: 0.7rem; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 8px; font-weight: 600;
+    }
+
+    /* Equity chart */
+    .chart-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      flex: 1;
+    }
+    .chart-canvas { width: 100%; height: 120px; }
+
+    /* Positions table */
+    .positions-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th {
+      text-align: left; color: var(--muted); font-weight: 500;
+      padding: 6px 4px; border-bottom: 1px solid var(--border);
+      font-size: 0.7rem; text-transform: uppercase;
+    }
+    td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
+
+    /* Decision cards */
+    .decision-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .decision-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    .decision-time { font-size: 0.7rem; color: var(--muted); }
     .tag {
       display: inline-block; padding: 2px 8px; border-radius: 4px;
-      font-size: 0.75rem; font-weight: 600;
+      font-size: 0.7rem; font-weight: 600;
     }
-    .tag.buy { background: rgba(16, 185, 129, 0.2); color: var(--green); }
-    .tag.sell { background: rgba(239, 68, 68, 0.2); color: var(--red); }
-    .tag.hold { background: rgba(107, 114, 128, 0.2); color: var(--muted); }
-    .tag.approved { background: rgba(16, 185, 129, 0.2); color: var(--green); }
-    .tag.rejected { background: rgba(239, 68, 68, 0.2); color: var(--red); }
-    .sparkline { display: flex; align-items: end; gap: 2px; height: 60px; }
-    .sparkline .bar {
-      flex: 1; background: var(--blue); border-radius: 2px 2px 0 0;
-      min-height: 2px; transition: height 0.3s;
+    .tag.buy { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .tag.sell { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+    .tag.hold { background: rgba(107, 114, 128, 0.15); color: var(--muted); }
+    .tag.close { background: rgba(139, 92, 246, 0.15); color: var(--purple); }
+    .tag.approved { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .tag.rejected { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+
+    .decision-reasoning {
+      font-size: 0.8rem; color: var(--text); line-height: 1.5;
+      margin-bottom: 8px; opacity: 0.9;
     }
-    .connection-status {
-      font-size: 0.75rem; padding: 4px 8px; border-radius: 4px;
+    .decision-pipeline {
+      display: flex; gap: 4px; flex-wrap: wrap;
+      font-size: 0.65rem; color: var(--muted);
     }
-    .connected { background: rgba(16, 185, 129, 0.2); color: var(--green); }
-    .disconnected { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+    .pipeline-step {
+      padding: 2px 6px; border-radius: 3px;
+      background: var(--surface-alt);
+    }
+    .pipeline-step.active { color: var(--green); }
+    .pipeline-arrow { color: var(--border); }
+    .decision-hash {
+      font-size: 0.65rem; color: var(--muted); margin-top: 6px;
+      font-family: monospace;
+    }
+    .tx-link {
+      font-size: 0.7rem; color: var(--blue); text-decoration: none;
+    }
+
+    /* Risk gauges */
+    .gauge {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .gauge-label {
+      font-size: 0.7rem; color: var(--muted); margin-bottom: 6px;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .gauge-value {
+      font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    }
+    .gauge-bar-bg {
+      height: 4px; background: var(--border); border-radius: 2px;
+      margin-top: 8px; overflow: hidden;
+    }
+    .gauge-bar {
+      height: 100%; border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+    .gauge-bar.green { background: var(--green); }
+    .gauge-bar.yellow { background: var(--yellow); }
+    .gauge-bar.red { background: var(--red); }
+    .gauge-sub {
+      font-size: 0.65rem; color: var(--muted); margin-top: 4px;
+    }
+
+    /* Chain integrity */
+    .chain-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600;
+    }
+    .chain-valid { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .chain-invalid { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+
+    .empty-state {
+      color: var(--muted); font-size: 0.8rem; padding: 20px 0;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>Sentinel</h1>
-      <div class="status">
-        <span>Circuit: <span class="indicator" id="cb-indicator"></span> <span id="cb-state">-</span></span>
-        <span id="connection-status" class="connection-status disconnected">Disconnected</span>
-      </div>
-    </header>
+  <!-- Top bar -->
+  <div class="top-bar">
+    <h1>Sentinel</h1>
+    <div class="top-stat">
+      <div class="label">Equity</div>
+      <div class="value" id="equity">$0.00</div>
+    </div>
+    <div class="top-stat">
+      <div class="label">Daily PnL</div>
+      <div class="value" id="daily-pnl">$0.00</div>
+    </div>
+    <div class="top-stat">
+      <div class="label">Circuit Breaker</div>
+      <div id="cb-badge" class="cb-badge closed"><span class="cb-dot"></span> <span id="cb-state">Closed</span></div>
+    </div>
+    <span id="connection-status" class="connection-badge disconnected">Disconnected</span>
+  </div>
 
-    <div class="grid">
-      <div class="card">
-        <h2>Equity</h2>
-        <div class="metric" id="equity">$0.00</div>
-        <div class="sub">Peak: <span id="peak-equity">$0.00</span></div>
-      </div>
-
-      <div class="card">
-        <h2>Unrealized PnL</h2>
-        <div class="metric" id="unrealized-pnl">$0.00</div>
-        <div class="sub">Realized: <span id="realized-pnl">$0.00</span></div>
-      </div>
-
-      <div class="card">
-        <h2>Equity Curve</h2>
-        <div class="sparkline" id="sparkline"></div>
-      </div>
-
-      <div class="card">
-        <h2>Risk State</h2>
-        <div style="font-size: 0.875rem;">
-          <div>Daily Volume: <strong id="daily-volume">$0</strong></div>
-          <div>Positions: <strong id="position-count">0</strong></div>
-          <div>Price Age: <strong id="price-age">-</strong></div>
+  <div class="layout">
+    <!-- Left panel: Equity curve + positions -->
+    <div class="panel-left">
+      <div>
+        <div class="section-title">Equity Curve</div>
+        <div class="chart-container">
+          <canvas id="equity-chart" class="chart-canvas"></canvas>
         </div>
       </div>
 
-      <div class="card full-width">
-        <h2>Open Positions</h2>
-        <table>
-          <thead>
-            <tr><th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>uPnL</th><th>State</th></tr>
-          </thead>
-          <tbody id="positions-table"></tbody>
-        </table>
+      <div>
+        <div class="section-title">Open Positions</div>
+        <div class="positions-card">
+          <table>
+            <thead><tr><th>Market</th><th>Side</th><th>Size</th><th>uPnL</th></tr></thead>
+            <tbody id="positions-table"></tbody>
+          </table>
+        </div>
       </div>
 
-      <div class="card full-width">
-        <h2>Recent Decisions</h2>
-        <div class="timeline" id="decisions-timeline"></div>
+      <div>
+        <div class="section-title">Audit Chain</div>
+        <div id="chain-status" class="chain-badge chain-valid">Verifying...</div>
+      </div>
+    </div>
+
+    <!-- Center: Decision feed -->
+    <div class="panel-center">
+      <div class="section-title">Decision Feed</div>
+      <div id="decisions-feed"></div>
+    </div>
+
+    <!-- Right panel: Risk gauges -->
+    <div class="panel-right">
+      <div class="section-title">Risk Gauges</div>
+
+      <div class="gauge">
+        <div class="gauge-label">Margin Utilization</div>
+        <div class="gauge-value" id="margin-util">0%</div>
+        <div class="gauge-bar-bg"><div class="gauge-bar green" id="margin-bar" style="width: 0%"></div></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-label">Drawdown</div>
+        <div class="gauge-value" id="drawdown">0%</div>
+        <div class="gauge-bar-bg"><div class="gauge-bar green" id="drawdown-bar" style="width: 0%"></div></div>
+        <div class="gauge-sub">Peak: <span id="peak-equity">$0.00</span></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-label">Daily Volume Used</div>
+        <div class="gauge-value" id="daily-volume">$0</div>
+        <div class="gauge-bar-bg"><div class="gauge-bar green" id="volume-bar" style="width: 0%"></div></div>
+        <div class="gauge-sub">Limit: <span id="volume-limit">$0</span></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-label">Price Age</div>
+        <div class="gauge-value" id="price-age">-</div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-label">Uptime</div>
+        <div class="gauge-value" id="uptime">0s</div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-label">Gas Balance</div>
+        <div class="gauge-value" id="gas-balance">-</div>
       </div>
     </div>
   </div>
 
   <script>
     const equityHistory = [];
-    const MAX_SPARKLINE = 30;
+    const MAX_CHART_POINTS = 60;
 
     function fmt(n) { return typeof n === 'number' ? `$${n.toFixed(2)}` : '$0.00'; }
     function fmtDec(d) {
       if (typeof d === 'number') return d;
       if (d && typeof d === 'object' && d[0] !== undefined) return d[0] / 1e8;
       return 0;
+    }
+    function fmtPct(n) { return `${n.toFixed(1)}%`; }
+    function fmtDuration(s) {
+      if (s < 60) return `${Math.floor(s)}s`;
+      if (s < 3600) return `${Math.floor(s/60)}m ${Math.floor(s%60)}s`;
+      return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+    }
+
+    function gaugeColor(pct) {
+      if (pct < 50) return 'green';
+      if (pct < 80) return 'yellow';
+      return 'red';
+    }
+
+    // Draw equity chart on canvas
+    function drawEquityChart() {
+      const canvas = document.getElementById('equity-chart');
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.width = canvas.offsetWidth * dpr;
+      canvas.height = canvas.offsetHeight * dpr;
+      ctx.scale(dpr, dpr);
+
+      const w = canvas.offsetWidth;
+      const h = canvas.offsetHeight;
+
+      ctx.clearRect(0, 0, w, h);
+
+      if (equityHistory.length < 2) {
+        ctx.fillStyle = '#6b7280';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Collecting data...', w/2, h/2);
+        return;
+      }
+
+      const min = Math.min(...equityHistory);
+      const max = Math.max(...equityHistory);
+      const range = max - min || 1;
+      const padding = 4;
+
+      // Draw grid lines
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i < 4; i++) {
+        const y = padding + (i / 3) * (h - 2 * padding);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      }
+
+      // Draw line
+      ctx.beginPath();
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = 'round';
+
+      equityHistory.forEach((val, i) => {
+        const x = (i / (equityHistory.length - 1)) * w;
+        const y = h - padding - ((val - min) / range) * (h - 2 * padding);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Fill area under curve
+      const lastX = w;
+      const lastY = h - padding - ((equityHistory[equityHistory.length-1] - min) / range) * (h - 2 * padding);
+      ctx.lineTo(lastX, h);
+      ctx.lineTo(0, h);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, 'rgba(59, 130, 246, 0.15)');
+      grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+      ctx.fillStyle = grad;
+      ctx.fill();
     }
 
     async function fetchState() {
@@ -162,93 +390,132 @@
         const peak = fmtDec(acct.peak_equity);
         const realized = fmtDec(acct.realized_pnl);
         const positions = acct.positions || [];
+        const dailyVolume = fmtDec(state.daily_volume);
 
         let unrealized = 0;
         positions.forEach(p => { unrealized += fmtDec(p.unrealized_pnl); });
 
+        // Top bar
         document.getElementById('equity').textContent = fmt(equity);
-        document.getElementById('equity').className = 'metric' + (equity >= peak ? ' positive' : '');
-        document.getElementById('peak-equity').textContent = fmt(peak);
-        document.getElementById('unrealized-pnl').textContent = fmt(unrealized);
-        document.getElementById('unrealized-pnl').className = 'metric' + (unrealized >= 0 ? ' positive' : ' negative');
-        document.getElementById('realized-pnl').textContent = fmt(realized);
-        document.getElementById('daily-volume').textContent = fmt(fmtDec(state.daily_volume));
-        document.getElementById('position-count').textContent = positions.length;
+        document.getElementById('equity').className = 'value' + (equity > 0 ? ' positive' : '');
+
+        const dailyPnl = realized + unrealized;
+        document.getElementById('daily-pnl').textContent = (dailyPnl >= 0 ? '+' : '') + fmt(dailyPnl);
+        document.getElementById('daily-pnl').className = 'value' + (dailyPnl >= 0 ? ' positive' : ' negative');
 
         // Circuit breaker
         const cbState = state.circuit_breaker || 'closed';
-        document.getElementById('cb-state').textContent = cbState;
-        const ind = document.getElementById('cb-indicator');
-        ind.className = 'indicator ' + cbState;
+        document.getElementById('cb-state').textContent = cbState.charAt(0).toUpperCase() + cbState.slice(1);
+        document.getElementById('cb-badge').className = 'cb-badge ' + cbState;
 
         // Positions table
         const tbody = document.getElementById('positions-table');
         tbody.innerHTML = positions.length === 0
-          ? '<tr><td colspan="6" style="color: var(--muted)">No open positions</td></tr>'
-          : positions.map(p =>
-            `<tr>
+          ? '<tr><td colspan="4" class="empty-state">No positions</td></tr>'
+          : positions.map(p => {
+            const pnl = fmtDec(p.unrealized_pnl);
+            return `<tr>
               <td>${p.market}</td>
               <td><span class="tag ${p.side === 'long' ? 'buy' : 'sell'}">${p.side}</span></td>
-              <td>${fmtDec(p.size).toFixed(4)}</td>
-              <td>${fmt(fmtDec(p.entry_price))}</td>
-              <td style="color: ${fmtDec(p.unrealized_pnl) >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(fmtDec(p.unrealized_pnl))}</td>
-              <td>${p.state || 'confirmed'}</td>
-            </tr>`
-          ).join('');
+              <td>${fmtDec(p.size).toFixed(2)}</td>
+              <td style="color: ${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(pnl)}</td>
+            </tr>`;
+          }).join('');
 
-        // Sparkline
+        // Risk gauges
+        const drawdownPct = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
+        document.getElementById('drawdown').textContent = fmtPct(drawdownPct);
+        document.getElementById('drawdown-bar').style.width = Math.min(drawdownPct, 100) + '%';
+        document.getElementById('drawdown-bar').className = 'gauge-bar ' + gaugeColor(drawdownPct * 2);
+        document.getElementById('peak-equity').textContent = fmt(peak);
+
+        document.getElementById('daily-volume').textContent = fmt(dailyVolume);
+
+        // Equity chart
         equityHistory.push(equity);
-        if (equityHistory.length > MAX_SPARKLINE) equityHistory.shift();
-        const min = Math.min(...equityHistory);
-        const max = Math.max(...equityHistory);
-        const range = max - min || 1;
-        const sparkline = document.getElementById('sparkline');
-        sparkline.innerHTML = equityHistory.map(v => {
-          const height = ((v - min) / range * 50 + 10).toFixed(0);
-          return `<div class="bar" style="height: ${height}px"></div>`;
-        }).join('');
-      } catch (e) {
-        console.error('Failed to fetch state:', e);
-      }
+        if (equityHistory.length > MAX_CHART_POINTS) equityHistory.shift();
+        drawEquityChart();
+      } catch (e) {}
     }
 
     async function fetchDecisions() {
       try {
         const res = await fetch('/api/decisions');
         const decisions = await res.json();
-        const timeline = document.getElementById('decisions-timeline');
+        const feed = document.getElementById('decisions-feed');
+
         if (decisions.length === 0) {
-          timeline.innerHTML = '<div style="color: var(--muted)">No decisions yet</div>';
+          feed.innerHTML = '<div class="empty-state">No decisions yet. Agent is starting...</div>';
           return;
         }
-        timeline.innerHTML = decisions.slice().reverse().map(d => {
+
+        feed.innerHTML = decisions.slice().reverse().slice(0, 30).map(d => {
           const time = new Date(d.timestamp).toLocaleTimeString();
           const action = d.decision?.action || '?';
           const verdict = d.riskVerdict?.status || '?';
           const confidence = d.decision?.confidence || 0;
           const market = d.decision?.market || '?';
-          const tx = d.tradeResult?.txHash ? `<span style="color: var(--muted)"> tx: ${d.tradeResult.txHash.slice(0, 10)}...</span>` : '';
-          return `<div class="timeline-item">
-            <span style="color: var(--muted)">${time}</span>
-            <span class="tag ${action}">${action}</span>
-            <span class="tag ${verdict}">${verdict}</span>
-            <strong>${market}</strong>
-            (${confidence}% conf)${tx}
+          const reasoning = d.decision?.reasoning || '';
+          const hash = d.hash ? d.hash.slice(0, 12) : '';
+          const prevHash = d.prevHash ? d.prevHash.slice(0, 8) : '';
+          const tx = d.tradeResult?.txHash;
+          const success = d.tradeResult?.success;
+
+          // Pipeline steps
+          let pipeline = `<span class="pipeline-step active">Market Data</span>
+            <span class="pipeline-arrow">&rarr;</span>
+            <span class="pipeline-step active">AI Analysis</span>
+            <span class="pipeline-arrow">&rarr;</span>
+            <span class="pipeline-step ${verdict === 'approved' ? 'active' : ''}">Risk Check</span>`;
+
+          if (action !== 'hold') {
+            pipeline += `<span class="pipeline-arrow">&rarr;</span>
+              <span class="pipeline-step ${success ? 'active' : ''}">${success ? 'Executed' : (verdict === 'rejected' ? 'Blocked' : 'Pending')}</span>`;
+          }
+
+          return `<div class="decision-card">
+            <div class="decision-header">
+              <span class="decision-time">${time}</span>
+              <span class="tag ${action}">${action.toUpperCase()}</span>
+              <span class="tag ${verdict}">${verdict}</span>
+              <strong>${market}</strong>
+              <span style="color: var(--muted); font-size: 0.75rem">${confidence}%</span>
+            </div>
+            <div class="decision-reasoning">${reasoning}</div>
+            <div class="decision-pipeline">${pipeline}</div>
+            ${hash ? `<div class="decision-hash">audit: ${hash}... &larr; ${prevHash}...</div>` : ''}
+            ${tx ? `<div style="margin-top: 4px"><span class="tx-link">tx: ${tx.slice(0, 14)}...</span></div>` : ''}
           </div>`;
         }).join('');
-      } catch (e) {
-        console.error('Failed to fetch decisions:', e);
-      }
+      } catch (e) {}
     }
 
     async function fetchHealth() {
       try {
         const res = await fetch('/api/health');
-        const health = await res.json();
-        const ageMs = health.priceAgeMs;
+        const h = await res.json();
+        const ageMs = h.priceAgeMs;
         const ageStr = ageMs === Infinity ? 'never' : ageMs < 60000 ? `${(ageMs/1000).toFixed(0)}s` : `${(ageMs/60000).toFixed(1)}m`;
         document.getElementById('price-age').textContent = ageStr;
+        document.getElementById('uptime').textContent = fmtDuration(h.uptime);
       } catch (e) {}
+    }
+
+    async function verifyChain() {
+      try {
+        const res = await fetch('/api/audit/verify');
+        const result = await res.json();
+        const el = document.getElementById('chain-status');
+        if (result.valid) {
+          el.className = 'chain-badge chain-valid';
+          el.innerHTML = `&#10003; Valid (${result.entries} entries)`;
+        } else {
+          el.className = 'chain-badge chain-invalid';
+          el.innerHTML = `&#10007; Broken at #${result.brokenAt}`;
+        }
+      } catch (e) {
+        document.getElementById('chain-status').textContent = 'Unavailable';
+      }
     }
 
     // SSE connection
@@ -258,7 +525,7 @@
 
       es.onopen = () => {
         status.textContent = 'Live';
-        status.className = 'connection-status connected';
+        status.className = 'connection-badge connected';
       };
 
       es.onmessage = (event) => {
@@ -267,13 +534,17 @@
           if (payload.type === 'trade' || payload.type === 'decision' || payload.type === 'circuit') {
             fetchState();
             fetchDecisions();
+            verifyChain();
+          }
+          if (payload.type === 'error') {
+            fetchHealth();
           }
         } catch {}
       };
 
       es.onerror = () => {
         status.textContent = 'Disconnected';
-        status.className = 'connection-status disconnected';
+        status.className = 'connection-badge disconnected';
         es.close();
         setTimeout(connectSSE, 5000);
       };
@@ -283,9 +554,11 @@
     fetchState();
     fetchDecisions();
     fetchHealth();
+    verifyChain();
     setInterval(fetchState, 10000);
     setInterval(fetchDecisions, 15000);
     setInterval(fetchHealth, 30000);
+    setInterval(verifyChain, 60000);
     connectSSE();
   </script>
 </body>

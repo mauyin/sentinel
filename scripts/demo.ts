@@ -326,7 +326,7 @@ async function main() {
   if (isLive) {
     executor = createRouter(env);
   } else {
-    executor = new ExecutionRouter();
+    executor = new ExecutionRouter(env);
     const mock = new MockExecutor();
     executor.register(8453, mock);
     executor.register(84532, mock);

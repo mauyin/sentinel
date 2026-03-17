@@ -16,6 +16,7 @@ import {
   RISK_REVIEW_SYSTEM,
   buildMarketAnalysisPrompt,
   buildRiskReviewPrompt,
+  formatStrategyMemory,
 } from "../llm/prompts.js";
 import { fetchMarketSnapshots, fetchPrices } from "../market/feed.js";
 import { fetchPortfolio } from "../market/portfolio.js";
@@ -49,6 +50,7 @@ export interface AgentDeps {
 }
 
 const MAX_RECENT_TRADES = 20;
+const STRATEGY_MEMORY_ENTRIES = 10;
 
 export async function runAutonomous(deps: AgentDeps): Promise<void> {
   const log = childLogger({ component: "autonomous" });
@@ -186,17 +188,35 @@ async function runCycle(
   const portfolioData = formatPortfolio(portfolio);
   const tradesData = formatRecentTrades(recentTrades);
   const riskContextStr = formatRiskContext(riskCtx);
+
+  // Strategy memory: load recent audit entries for LLM context
+  const recentAuditEntries = audit.getRecentEntries(STRATEGY_MEMORY_ENTRIES);
+  const strategyMemory = formatStrategyMemory(recentAuditEntries);
+
   const userPrompt = buildMarketAnalysisPrompt(
     marketData,
     portfolioData,
     tradesData,
     riskContextStr,
+    strategyMemory,
   );
 
   // ── Step 3: REASON ───────────────────────────────────────────────────
   log.info("step 3/7: querying LLM for trade decision");
 
-  const rawResponse = await chat(llm, MARKET_ANALYSIS_SYSTEM, userPrompt);
+  let rawResponse: string;
+  try {
+    rawResponse = await chat(llm, MARKET_ANALYSIS_SYSTEM, userPrompt);
+  } catch (err) {
+    log.error({ err }, "LLM unavailable after retries — pausing cycle");
+    eventBus?.emit("error", {
+      source: "llm",
+      message: "AI reasoning temporarily unavailable — trading paused",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
   const decision = parseTradeDecision(rawResponse);
 
   if (!decision) {
@@ -236,16 +256,26 @@ async function runCycle(
     return;
   }
 
+  // ── Handle CLOSE action ──────────────────────────────────────────────
+  if (decision.action === "close") {
+    return handleCloseAction(deps, decision, snapshots, riskCtx, recentTrades, log);
+  }
+
   // ── Step 5: RISK REVIEW (2nd LLM pass) ──────────────────────────────
   log.info("step 5/7: LLM risk review");
 
-  const riskReviewPrompt = buildRiskReviewPrompt(
-    JSON.stringify(decision),
-    portfolioData,
-    JSON.stringify(riskState),
-  );
-  const riskReviewRaw = await chat(llm, RISK_REVIEW_SYSTEM, riskReviewPrompt);
-  const riskReview = parseRiskReview(riskReviewRaw);
+  let riskReview: RiskReview | null = null;
+  try {
+    const riskReviewPrompt = buildRiskReviewPrompt(
+      JSON.stringify(decision),
+      portfolioData,
+      JSON.stringify(riskState),
+    );
+    const riskReviewRaw = await chat(llm, RISK_REVIEW_SYSTEM, riskReviewPrompt);
+    riskReview = parseRiskReview(riskReviewRaw);
+  } catch (err) {
+    log.warn({ err }, "LLM risk review failed — proceeding without");
+  }
 
   if (riskReview && !riskReview.approved) {
     log.info(
@@ -386,6 +416,104 @@ async function runCycle(
       side: result.side,
     },
     "cycle complete",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Close action handler
+// ---------------------------------------------------------------------------
+
+async function handleCloseAction(
+  deps: AgentDeps,
+  decision: import("../core/types.js").TradeDecision,
+  snapshots: MarketSnapshot[],
+  riskCtx: RiskContextData,
+  recentTrades: TradeResult[],
+  log: ReturnType<typeof childLogger>,
+): Promise<void> {
+  const { risk, audit, executor, markets, eventBus } = deps;
+
+  const marketPair = findMarketPair(markets, decision.market);
+  const snapshot = findSnapshot(snapshots, decision.market);
+
+  if (!marketPair || !snapshot) {
+    log.warn({ market: decision.market }, "market not found for close — skipping");
+    return;
+  }
+
+  // Find the open position for this market
+  const position = riskCtx.openPositions.find(
+    (p) => p.market.toLowerCase() === marketPair.id.toLowerCase(),
+  );
+
+  if (!position) {
+    log.info({ market: decision.market }, "no open position to close — skipping");
+    await audit.logDecision(snapshot, decision, {
+      status: "rejected",
+      reason: "no open position to close",
+    });
+    return;
+  }
+
+  const side = position.side as "long" | "short";
+  const size = new Decimal(position.size);
+
+  log.info(
+    { market: marketPair.id, side, size: size.toNumber() },
+    "closing position",
+  );
+
+  // Update price in risk engine
+  await risk.updatePrice(marketPair.id, snapshot.price.toNumber());
+
+  const result = await executor.closePosition({
+    market: marketPair,
+    side,
+    size,
+    price: snapshot.price,
+    slippageBps: DEFAULT_SLIPPAGE_BPS,
+  });
+
+  if (result.success) {
+    // Process as opposite-side fill to close the position in risk engine
+    const oppositeSide = side === "long" ? "short" : "long";
+    await risk.processFill({
+      market: marketPair.id,
+      side: oppositeSide,
+      size: size.toNumber(),
+      price: snapshot.price.toNumber(),
+      fee: result.fee?.toNumber() ?? 0,
+    });
+    await risk.recordWin();
+  } else {
+    await risk.recordLoss();
+  }
+
+  await audit.logDecision(
+    snapshot,
+    decision,
+    { status: result.success ? "approved" : "rejected" },
+    result,
+  );
+
+  eventBus?.emit("trade", {
+    success: result.success,
+    market: result.market,
+    side: result.side,
+    size: size.toNumber(),
+    price: snapshot.price.toNumber(),
+    txHash: result.txHash,
+    action: "close",
+  });
+
+  recentTrades.push(result);
+  if (recentTrades.length > MAX_RECENT_TRADES) {
+    recentTrades.shift();
+  }
+
+  log.info(
+    { success: result.success, market: marketPair.id, txHash: result.txHash },
+    "position close complete",
   );
 }
 

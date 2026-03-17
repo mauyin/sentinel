@@ -24,21 +24,29 @@ export interface DashboardDeps {
 /**
  * Embedded HTTP server for the web dashboard.
  * Endpoints:
- *   GET /          → serve static dashboard HTML
- *   GET /api/state → risk engine state, positions, equity
+ *   GET /              → serve static dashboard HTML
+ *   GET /api/state     → risk engine state, positions, equity
  *   GET /api/decisions → recent audit entries
- *   GET /api/health → agent alive, circuit breaker, last price age
- *   GET /events    → SSE stream of real-time events
+ *   GET /api/health    → agent alive, circuit breaker, last price age
+ *   GET /api/audit/verify → verify hash chain integrity
+ *   GET /events        → SSE stream of real-time events
  */
 export function startDashboard(deps: DashboardDeps): void {
   const { risk, audit, eventBus, port } = deps;
   const sseClients: Set<ServerResponse> = new Set();
 
   // Subscribe to EventBus and forward to SSE clients
+  // Fix: snapshot the set before iterating to avoid race condition on disconnect
   eventBus.on((event: EventPayload) => {
     const data = `data: ${JSON.stringify(event)}\n\n`;
-    for (const client of sseClients) {
-      client.write(data);
+    const clients = [...sseClients];
+    for (const client of clients) {
+      try {
+        client.write(data);
+      } catch {
+        // Client disconnected during write — remove it
+        sseClients.delete(client);
+      }
     }
   });
 
@@ -88,6 +96,16 @@ export function startDashboard(deps: DashboardDeps): void {
           "Access-Control-Allow-Origin": "*",
         });
         res.end(JSON.stringify(health));
+        return;
+      }
+
+      if (url === "/api/audit/verify") {
+        const result = audit.verifyChain();
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(JSON.stringify(result));
         return;
       }
 

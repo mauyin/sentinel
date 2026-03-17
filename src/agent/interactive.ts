@@ -7,6 +7,7 @@ import {
   RISK_REVIEW_SYSTEM,
   buildMarketAnalysisPrompt,
   buildRiskReviewPrompt,
+  formatStrategyMemory,
 } from "../llm/prompts.js";
 import { fetchMarketSnapshots, fetchPrices } from "../market/feed.js";
 import { fetchPortfolio } from "../market/portfolio.js";
@@ -28,8 +29,9 @@ import {
   DEFAULT_DEADLINE_SECONDS,
 } from "../core/constants.js";
 
+const log = childLogger({ component: "interactive" });
+
 export async function runInteractive(deps: AgentDeps): Promise<void> {
-  const log = childLogger({ component: "interactive" });
   const recentTrades: TradeResult[] = [];
 
   const rl = createInterface({
@@ -38,8 +40,8 @@ export async function runInteractive(deps: AgentDeps): Promise<void> {
   });
 
   log.info("interactive mode started — type 'q' to quit");
-  console.log("\n=== Sentinel — Interactive DeFi Trading Agent ===\n");
-  console.log("Commands: [enter] run analysis | [q] quit\n");
+  process.stdout.write("\n=== Sentinel — Interactive DeFi Trading Agent ===\n");
+  process.stdout.write("Commands: [enter] run analysis | [q] quit\n\n");
 
   let running = true;
 
@@ -56,7 +58,7 @@ export async function runInteractive(deps: AgentDeps): Promise<void> {
       await runInteractiveCycle(deps, recentTrades, rl);
     } catch (err) {
       log.error({ err }, "interactive cycle failed");
-      console.error("\nError during analysis. See logs for details.\n");
+      process.stdout.write("\nError during analysis. See logs for details.\n\n");
     }
   }
 
@@ -73,7 +75,7 @@ async function runInteractiveCycle(
   const account = getAccount(env.AGENT_PRIVATE_KEY as `0x${string}`);
 
   // Step 1: Fetch market data
-  console.log("\nFetching market data...");
+  log.info("fetching market data");
   const coingeckoIds = [
     ...new Set(markets.flatMap((m) => [m.baseToken.coingeckoId, m.quoteToken.coingeckoId])),
   ];
@@ -83,7 +85,7 @@ async function runInteractiveCycle(
   ]);
 
   if (snapshots.length === 0) {
-    console.log("No market data available. Try again later.\n");
+    log.warn("no market data available");
     return;
   }
 
@@ -112,10 +114,10 @@ async function runInteractiveCycle(
   const marketData = formatMarketData(snapshots);
   const portfolioData = formatPortfolio(portfolio);
 
-  console.log("\n--- Market Data ---");
-  console.log(marketData);
-  console.log("\n--- Portfolio ---");
-  console.log(portfolioData);
+  process.stdout.write("\n--- Market Data ---\n");
+  process.stdout.write(marketData + "\n");
+  process.stdout.write("\n--- Portfolio ---\n");
+  process.stdout.write(portfolioData + "\n");
 
   // Fetch risk state for context
   const riskState = await risk.getState();
@@ -137,33 +139,47 @@ async function runInteractiveCycle(
   };
 
   // Step 2: LLM analysis
-  console.log("\nAnalyzing with LLM...");
+  log.info("querying LLM for trade decision");
   const tradesData = formatRecentTrades(recentTrades);
   const riskContextStr = formatRiskContext(riskCtx);
+
+  // Strategy memory for context
+  const recentAuditEntries = audit.getRecentEntries(10);
+  const strategyMemory = formatStrategyMemory(recentAuditEntries);
+
   const userPrompt = buildMarketAnalysisPrompt(
     marketData,
     portfolioData,
     tradesData,
     riskContextStr,
+    strategyMemory,
   );
 
-  const rawResponse = await chat(llm, MARKET_ANALYSIS_SYSTEM, userPrompt);
-  const decision = parseTradeDecision(rawResponse);
-
-  if (!decision) {
-    console.log("LLM returned unparseable response. Skipping.\n");
+  let rawResponse: string;
+  try {
+    rawResponse = await chat(llm, MARKET_ANALYSIS_SYSTEM, userPrompt);
+  } catch (err) {
+    log.error({ err }, "LLM request failed");
+    process.stdout.write("\nLLM unavailable. Try again later.\n\n");
     return;
   }
 
-  console.log("\n--- Trade Decision ---");
-  console.log(`  Action:     ${decision.action}`);
-  console.log(`  Market:     ${decision.market}`);
-  console.log(`  Confidence: ${decision.confidence}%`);
-  console.log(`  Size (raw): ${decision.size ?? "N/A"}`);
-  console.log(`  Reasoning:  ${decision.reasoning}`);
+  const decision = parseTradeDecision(rawResponse);
+
+  if (!decision) {
+    log.warn("LLM returned unparseable response");
+    return;
+  }
+
+  process.stdout.write("\n--- Trade Decision ---\n");
+  process.stdout.write(`  Action:     ${decision.action}\n`);
+  process.stdout.write(`  Market:     ${decision.market}\n`);
+  process.stdout.write(`  Confidence: ${decision.confidence}%\n`);
+  process.stdout.write(`  Size (raw): ${decision.size ?? "N/A"}\n`);
+  process.stdout.write(`  Reasoning:  ${decision.reasoning}\n`);
 
   if (decision.action === "hold") {
-    console.log("\nLLM recommends HOLD. No trade to execute.\n");
+    log.info("LLM recommends HOLD");
     const snapshot = snapshots[0];
     if (snapshot) {
       await audit.logDecision(snapshot, decision, { status: "approved" });
@@ -171,26 +187,98 @@ async function runInteractiveCycle(
     return;
   }
 
+  // Handle close action
+  if (decision.action === "close") {
+    const marketPair =
+      markets.find((m) => m.id.toLowerCase() === decision.market.toLowerCase()) ??
+      markets.find((m) =>
+        decision.market.toLowerCase().includes(m.baseToken.symbol.toLowerCase()),
+      ) ??
+      markets[0]!;
+
+    const snapshot = snapshots.find(
+      (s) => s.market.toLowerCase() === decision.market.toLowerCase(),
+    ) ?? snapshots[0]!;
+
+    const position = riskCtx.openPositions.find(
+      (p) => p.market.toLowerCase() === marketPair.id.toLowerCase(),
+    );
+
+    if (!position) {
+      log.info({ market: decision.market }, "no open position to close");
+      process.stdout.write("\nNo open position to close.\n\n");
+      await audit.logDecision(snapshot, decision, { status: "rejected", reason: "no open position" });
+      return;
+    }
+
+    const answer = await prompt(
+      rl,
+      `\nClose ${position.side} ${position.size} USD on ${marketPair.id}? (y/n): `,
+    );
+
+    if (answer.toLowerCase() !== "y") {
+      log.info("user declined close");
+      await audit.logDecision(snapshot, decision, { status: "rejected", reason: "user declined" });
+      return;
+    }
+
+    const side = position.side as "long" | "short";
+    const size = new Decimal(position.size);
+
+    await risk.updatePrice(marketPair.id, snapshot.price.toNumber());
+
+    const result = await executor.closePosition({
+      market: marketPair,
+      side,
+      size,
+      price: snapshot.price,
+      slippageBps: DEFAULT_SLIPPAGE_BPS,
+    });
+
+    if (result.success) {
+      const oppositeSide = side === "long" ? "short" : "long";
+      await risk.processFill({
+        market: marketPair.id,
+        side: oppositeSide,
+        size: size.toNumber(),
+        price: snapshot.price.toNumber(),
+        fee: result.fee?.toNumber() ?? 0,
+      });
+    }
+
+    await audit.logDecision(snapshot, decision, { status: result.success ? "approved" : "rejected" }, result);
+    recentTrades.push(result);
+    if (recentTrades.length > 20) recentTrades.shift();
+
+    process.stdout.write(`\n--- Close Result ---\n`);
+    process.stdout.write(`  Success: ${result.success}\n`);
+    process.stdout.write(`  TxHash:  ${result.txHash ?? "N/A"}\n`);
+    if (result.error) process.stdout.write(`  Error:   ${result.error}\n`);
+    process.stdout.write("\n");
+    return;
+  }
+
   // Step 3: Risk review
-  console.log("\nRunning risk review...");
+  log.info("running LLM risk review");
   const riskReviewPrompt = buildRiskReviewPrompt(
     JSON.stringify(decision),
     portfolioData,
     JSON.stringify(riskState),
   );
-  const riskReviewRaw = await chat(llm, RISK_REVIEW_SYSTEM, riskReviewPrompt);
 
   let riskApproved = true;
   try {
+    const riskReviewRaw = await chat(llm, RISK_REVIEW_SYSTEM, riskReviewPrompt);
     const riskReview = JSON.parse(
       riskReviewRaw.match(/\{[\s\S]*\}/)?.[0] ?? riskReviewRaw,
     );
     if (riskReview && !riskReview.approved) {
-      console.log(`\nLLM Risk Review REJECTED: ${riskReview.concerns?.join("; ")}`);
+      log.info({ concerns: riskReview.concerns }, "LLM risk review rejected");
+      process.stdout.write(`\nLLM Risk Review REJECTED: ${riskReview.concerns?.join("; ")}\n`);
       riskApproved = false;
     }
   } catch {
-    console.log("Could not parse risk review — proceeding with caution.");
+    log.warn("could not parse LLM risk review — proceeding with caution");
   }
 
   // Step 4: Rust risk engine
@@ -220,11 +308,11 @@ async function runInteractiveCycle(
   });
   const tradeSize = sizerResult.sizeUsd;
 
-  console.log(`\n--- Position Sizing ---`);
-  console.log(`  ${sizerResult.reasoning}`);
+  process.stdout.write(`\n--- Position Sizing ---\n`);
+  process.stdout.write(`  ${sizerResult.reasoning}\n`);
 
   if (tradeSize.lessThanOrEqualTo(0)) {
-    console.log("\nNo trade capacity available. Skipping.\n");
+    log.info("no trade capacity available");
     return;
   }
 
@@ -237,23 +325,23 @@ async function runInteractiveCycle(
     leverage: 1,
   });
 
-  console.log(`\n--- Risk Engine Verdict ---`);
-  console.log(`  Status: ${verdict.status}`);
+  process.stdout.write(`\n--- Risk Engine Verdict ---\n`);
+  process.stdout.write(`  Status: ${verdict.status}\n`);
   if (verdict.status !== "approved") {
-    console.log(`  Reason: ${verdict.reason ?? "unknown"}`);
+    process.stdout.write(`  Reason: ${verdict.reason ?? "unknown"}\n`);
     await audit.logDecision(snapshot, decision, {
       status: "rejected",
       reason: (verdict.reason as string) ?? "risk engine rejected",
     });
 
     if (!riskApproved) {
-      console.log("\nBoth LLM and Rust risk engine rejected. Skipping.\n");
+      log.info("both LLM and Rust risk engine rejected");
       return;
     }
   }
 
   if (verdict.status !== "approved") {
-    console.log("\nRisk engine rejected the trade.\n");
+    log.info("risk engine rejected the trade");
     return;
   }
 
@@ -264,12 +352,11 @@ async function runInteractiveCycle(
   );
 
   if (answer.toLowerCase() === "q") {
-    console.log("Quitting.\n");
     return;
   }
 
   if (answer.toLowerCase() !== "y") {
-    console.log("Trade skipped.\n");
+    log.info("user declined trade");
     await audit.logDecision(snapshot, decision, {
       status: "rejected",
       reason: "user declined",
@@ -278,7 +365,7 @@ async function runInteractiveCycle(
   }
 
   // Step 6: Execute
-  console.log("\nExecuting trade...");
+  log.info("executing trade");
   const executeParams: ExecuteParams = {
     market: marketPair,
     side,
@@ -310,11 +397,11 @@ async function runInteractiveCycle(
   recentTrades.push(result);
   if (recentTrades.length > 20) recentTrades.shift();
 
-  console.log(`\n--- Result ---`);
-  console.log(`  Success: ${result.success}`);
-  console.log(`  TxHash:  ${result.txHash ?? "N/A"}`);
-  if (result.error) console.log(`  Error:   ${result.error}`);
-  console.log();
+  process.stdout.write(`\n--- Result ---\n`);
+  process.stdout.write(`  Success: ${result.success}\n`);
+  process.stdout.write(`  TxHash:  ${result.txHash ?? "N/A"}\n`);
+  if (result.error) process.stdout.write(`  Error:   ${result.error}\n`);
+  process.stdout.write("\n");
 }
 
 function prompt(rl: Interface, question: string): Promise<string> {
